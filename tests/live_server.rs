@@ -25,7 +25,7 @@ fn pump_until(sessions: &mut [&mut Session], secs: u64, mut done: impl FnMut(&[&
     while Instant::now() < end {
         for s in sessions.iter_mut() {
             s.update();
-            s.send_position(None, false);
+            s.send_position(None, Default::default(), false, false);
             if let Phase::Failed(why) = &s.phase {
                 panic!("{} failed: {why}\nlog: {:#?}", s.config.name, s.log);
             }
@@ -49,6 +49,29 @@ fn logs_in_enters_arena_and_downloads_map() {
 
     let settings = s.settings.as_ref().unwrap();
     assert!(settings.ships.iter().all(|sh| sh.initial_speed > 0), "ship settings parsed");
+    // Values from the test zone's conf/svs (server scales damage by 1000).
+    let w = &settings.ships[0];
+    println!("arena: {settings:?}");
+    assert_eq!((w.bullet_speed, w.bomb_speed, w.bullet_fire_delay, w.bomb_fire_delay), (2000, 2000, 25, 150));
+    assert_eq!((w.bullet_fire_energy, w.bomb_fire_energy, w.multi_fire_angle, w.max_mines), (20, 300, 500, 5));
+    assert_eq!((w.shrapnel_max, w.shrapnel_rate, w.max_guns, w.max_bombs, w.initial_guns), (8, 2, 3, 2, 1));
+    assert_eq!((settings.bullet_alive_time, settings.bomb_alive_time, settings.mine_alive_time), (550, 6000, 12000));
+    assert_eq!((settings.bomb_explode_pixels, settings.bomb_explode_delay, settings.enter_delay), (80, 150, 200));
+    assert_eq!((settings.proximity_distance, settings.shrapnel_speed, settings.team_max_mines), (3, 3000, 12));
+    assert_eq!(settings.bullet_damage_level, 100_000);
+    assert_eq!(settings.bomb_damage_level, 750_000);
+    assert_eq!(settings.bullet_damage_upgrade, 50_000);
+    assert!(settings.exact_damage && settings.bomb_safety);
+    assert_eq!(
+        settings.prize_weights,
+        [80, 110, 50, 25, 30, 30, 10, 50, 45, 45, 50, 80, 30, 0, 40, 45, 5, 5, 60, 30, 20, 10, 25, 20, 80, 10, 25, 25]
+    );
+    // arenas/(default)/arena.conf overrides PrizeFactor, PrizeDelay and MinimumVirtual.
+    assert_eq!((settings.prize_factor, settings.prize_delay, settings.prize_hide_count), (10000, 700, 10));
+    assert_eq!((settings.minimum_virtual, settings.upgrade_virtual), (10, 6));
+    assert_eq!((settings.prize_min_exist, settings.prize_max_exist, settings.prize_negative_factor), (4000, 8000, 300));
+    assert_eq!((settings.multi_prize_count, settings.death_prize_time, settings.engine_shutdown_time), (10, 800, 700));
+    assert!(!settings.take_prize_reliable);
     assert!(s.pid.is_some());
     assert!(s.me().is_some(), "we appear in our own player list");
     let map = s.map.as_ref().unwrap();
@@ -106,19 +129,19 @@ fn two_clients_see_each_other_fly() {
         .expect("map has an open runway");
     // Servers only relay ships within view, so B watches the middle of A's flight path.
     b.spectate_at = Vec2::new(start.x, start.y - 15.0);
-    b.send_position(None, true);
+    b.send_position(None, Default::default(), false, true);
     let mut ship = Ship::new(0, start, &settings);
     let input = Input { forward: true, ..Default::default() };
     let end = Instant::now() + Duration::from_secs(2);
     while Instant::now() < end {
         ship.tick(&map, &settings, input);
         a.update();
-        a.send_position(Some(&ship), false);
+        a.send_position(Some(&ship), Default::default(), false, false);
         b.update();
         b.tick_players();
         std::thread::sleep(Duration::from_millis(10));
     }
-    a.send_position(Some(&ship), true);
+    a.send_position(Some(&ship), Default::default(), false, true);
     let deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < deadline {
         a.update();
@@ -139,4 +162,99 @@ fn two_clients_see_each_other_fly() {
     assert!((seen.position.y - ship.position.y).abs() < 2.0);
     a.disconnect();
     b.disconnect();
+}
+
+/// Full combat round trip: B shoots A until A's client registers the damage, dies and tells
+/// the server, and the server announces the kill back to B.
+#[test]
+fn shots_kill_and_server_reports_the_kill() {
+    use aicontinuum::game::Game;
+    use aicontinuum::lvl::TILE_SAFE;
+
+    if server().is_none() {
+        return;
+    }
+    let mut a = Game::online(Session::connect(config("AIC-Target")).unwrap());
+    let mut b = Game::online(Session::connect(config("AIC-Gunner")).unwrap());
+    let pump = |a: &mut Game, b: &mut Game, secs: u64, mut done: Box<dyn FnMut(&Game, &Game) -> bool>| {
+        let end = Instant::now() + Duration::from_secs(secs);
+        let mut next = Instant::now();
+        while Instant::now() < end {
+            a.frame();
+            b.frame();
+            while Instant::now() >= next {
+                for g in [&mut *a, &mut *b] {
+                    let fired = g.tick(Input::default());
+                    g.send_updates(fired);
+                }
+                next += Duration::from_millis(10);
+            }
+            if done(a, b) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        false
+    };
+    assert!(pump(&mut a, &mut b, 15, Box::new(|a, b| a.world().is_some() && b.world().is_some())), "join");
+    a.request_ship(0);
+    b.request_ship(0);
+    let (a_pid, b_pid) = (a.local_pid(), b.local_pid());
+    assert!(pump(&mut a, &mut b, 10, Box::new(|a, b| a.alive() && b.alive())), "ships");
+    // Opposite teams so shots do damage.
+    a.session.as_mut().unwrap().request_freq(11);
+    b.session.as_mut().unwrap().request_freq(22);
+    assert!(
+        pump(&mut a, &mut b, 10, Box::new(move |a, b| {
+            let freq = |g: &Game, pid| g.session.as_ref().unwrap().players.get(&pid).map(|p| p.freq);
+            freq(a, a_pid) == Some(11) && freq(b, b_pid) == Some(22) && a.alive() && b.alive()
+        })),
+        "freq change\nA: {:#?}",
+        a.session.as_ref().unwrap().log
+    );
+
+    // Put them in open space outside any safe zone, B 8 tiles left of A facing right.
+    let (map, _) = a.world().unwrap();
+    let spot = (0..1024 * 1024)
+        .map(|i| Vec2::new((i % 1024) as f32 + 0.5, (i / 1024) as f32 + 0.5))
+        .find(|p| {
+            p.x > 30.0 && (-12..=4).all(|dx| (-3..=3).all(|dy| {
+                let (x, y) = (p.x as i32 + dx, p.y as i32 + dy);
+                !map.is_solid(x, y) && map.tile(x, y) != TILE_SAFE
+            }))
+        })
+        .expect("open space");
+    a.ship.as_mut().unwrap().position = spot;
+    let gunner = b.ship.as_mut().unwrap();
+    gunner.position = Vec2::new(spot.x - 8.0, spot.y);
+    gunner.orientation = 0.25; // facing right
+    // Let each side see the other's new position before shooting.
+    pump(&mut a, &mut b, 2, Box::new(|_, _| false));
+
+    let end = Instant::now() + Duration::from_secs(20);
+    let mut next = Instant::now();
+    while Instant::now() < end && b.kills == 0 {
+        a.frame();
+        b.frame();
+        while Instant::now() >= next {
+            let fired = a.tick(Input::default());
+            a.send_updates(fired);
+            let fired = b.tick(Input { gun: true, ..Default::default() });
+            b.send_updates(fired);
+            // Keep the gunner aimed and in place.
+            if let Some(s) = b.ship.as_mut() {
+                s.position = Vec2::new(spot.x - 8.0, spot.y);
+                s.velocity = Vec2::default();
+                s.orientation = 0.25;
+            }
+            next += Duration::from_millis(10);
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    println!("A deaths {} B kills {}; A log tail {:?}", a.deaths, b.kills, a.session.as_ref().unwrap().log.iter().rev().take(5).collect::<Vec<_>>());
+    assert_eq!(a.deaths, 1, "target died on its own client");
+    assert_eq!(b.kills, 1, "server reported the kill to the gunner");
+    for g in [&mut a, &mut b] {
+        g.session.as_mut().unwrap().disconnect();
+    }
 }

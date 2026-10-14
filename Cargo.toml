@@ -8,5 +8,6 @@ name = "AIContinuum"
 path = "src/main.rs"
 
 [dependencies]
+image = { version = "0.25.10", default-features = false, features = ["png", "gif"] }
 macroquad = "0.4.16"
 miniz_oxide = "0.9.1"

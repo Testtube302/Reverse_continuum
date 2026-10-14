@@ -6,6 +6,7 @@
 
 use crate::lvl::Map;
 use crate::settings::{ArenaSettings, ShipSettings};
+use crate::weapons::{WeaponData, WeaponKind};
 
 pub const TICK_SECONDS: f32 = 0.01;
 
@@ -22,6 +23,19 @@ impl Vec2 {
     pub fn length(self) -> f32 {
         (self.x * self.x + self.y * self.y).sqrt()
     }
+    pub fn add(self, o: Self) -> Self {
+        Self::new(self.x + o.x, self.y + o.y)
+    }
+    pub fn sub(self, o: Self) -> Self {
+        Self::new(self.x - o.x, self.y - o.y)
+    }
+    pub fn scale(self, k: f32) -> Self {
+        Self::new(self.x * k, self.y * k)
+    }
+    pub fn rotate(self, rads: f32) -> Self {
+        let (s, c) = rads.sin_cos();
+        Self::new(c * self.x - s * self.y, s * self.x + c * self.y)
+    }
     fn axis(self, a: usize) -> f32 {
         if a == 0 { self.x } else { self.y }
     }
@@ -29,7 +43,7 @@ impl Vec2 {
         if a == 0 { &mut self.x } else { &mut self.y }
     }
     /// Snaps to the 1/16-tile (one pixel) grid, truncating toward zero.
-    fn pixel_rounded(self) -> Self {
+    pub fn pixel_rounded(self) -> Self {
         Self::new((self.x * 16.0) as i32 as f32 / 16.0, (self.y * 16.0) as i32 as f32 / 16.0)
     }
 }
@@ -49,6 +63,9 @@ pub struct Input {
     pub forward: bool,
     pub backward: bool,
     pub afterburner: bool,
+    pub gun: bool,
+    pub bomb: bool,
+    pub mine: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -59,22 +76,155 @@ pub struct Ship {
     pub orientation: f32,
     pub energy: f32,
     pub thrusting: bool,
+    /// Gun and bomb levels, 1-based (0 = none).
+    pub guns: u32,
+    pub bombs: u32,
+    pub multifire: bool,
+    pub shrapnel: u32,
+    pub bounty: u32,
+    /// Current (prize-upgradable) stats, in the same units as the settings.
+    pub rotation: u32,
+    pub thrust: u32,
+    pub speed: u32,
+    pub recharge: u32,
+    pub max_energy: u32,
+    pub caps: Capabilities,
+    /// Item counts in prize order: repel, burst, decoy, thor, brick, rocket, portal.
+    pub items: [u32; 7],
+    /// Ticks remaining on timed effects.
+    pub super_ticks: u32,
+    pub shield_ticks: u32,
+    pub shutdown_ticks: u32,
     tick: u32,
     last_bounce_tick: Option<u32>,
+    next_bullet_tick: u32,
+    next_bomb_tick: u32,
+}
+
+/// Abilities granted by prizes (or by the ship's settings).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Capabilities {
+    pub bouncing_bullets: bool,
+    pub multifire: bool,
+    pub proximity: bool,
+    pub stealth: bool,
+    pub cloak: bool,
+    pub xradar: bool,
+    pub antiwarp: bool,
+}
+
+/// A weapon the ship decided to fire this tick, and its energy cost.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Fire {
+    pub data: WeaponData,
+    pub cost: f32,
 }
 
 impl Ship {
     pub fn new(ship: u8, position: Vec2, settings: &ArenaSettings) -> Self {
+        let s = &settings.ships[ship as usize];
         Self {
             ship,
             position,
             velocity: Vec2::default(),
             orientation: 0.0,
-            energy: settings.ships[ship as usize].initial_energy as f32,
+            energy: s.initial_energy as f32,
             thrusting: false,
+            guns: s.initial_guns,
+            bombs: s.initial_bombs,
+            multifire: false,
+            shrapnel: 0,
+            bounty: s.initial_bounty,
+            rotation: s.initial_rotation,
+            thrust: s.initial_thrust,
+            speed: s.initial_speed,
+            recharge: s.initial_recharge,
+            max_energy: s.initial_energy,
+            caps: Capabilities {
+                stealth: s.stealth_status == 2,
+                cloak: s.cloak_status == 2,
+                xradar: s.xradar_status == 2,
+                antiwarp: s.antiwarp_status == 2,
+                ..Default::default()
+            },
+            items: s.item_initial,
+            super_ticks: 0,
+            shield_ticks: 0,
+            shutdown_ticks: 0,
             tick: 0,
             last_bounce_tick: None,
+            next_bullet_tick: 0,
+            next_bomb_tick: 0,
         }
+    }
+
+    /// Decides what (if anything) fires this tick, after `tick()` has moved the ship.
+    /// The caller spawns the weapon and then calls [`Ship::commit_fire`].
+    /// In a safe zone, trying to fire stops the ship instead.
+    pub fn try_fire(&mut self, input: Input, settings: &ArenaSettings, in_safe: bool) -> Option<Fire> {
+        let s = *self.stats(settings);
+        let now = self.tick;
+        let can_fast_shoot = !input.afterburner || !s.disable_fast_shooting;
+        let ready = |next: u32| now.wrapping_sub(next) as i32 >= 0;
+        let shrapnel = |d: WeaponData, guns: u32| {
+            if guns > 0 { d.with_shrapnel(self.shrapnel as u16, (guns - 1) as u16, false) } else { d }
+        };
+
+        let bomb_kind = if self.caps.proximity { WeaponKind::ProximityBomb } else { WeaponKind::Bomb };
+        let mut fire = None;
+        if input.gun && ready(self.next_bullet_tick) && self.guns > 0 && can_fast_shoot {
+            let level = (self.guns - 1) as u16;
+            let kind = if self.caps.bouncing_bullets { WeaponKind::BouncingBullet } else { WeaponKind::Bullet };
+            let multifire = self.multifire && self.caps.multifire;
+            let data = WeaponData::new(kind, level).with_alternate(multifire);
+            let (delay, per_level) =
+                if multifire { (s.multi_fire_delay, s.multi_fire_energy) } else { (s.bullet_fire_delay, s.bullet_fire_energy) };
+            let cost = (per_level * (level as u32 + 1)) as f32;
+            if cost < self.energy {
+                self.next_bullet_tick = now + delay;
+                self.next_bomb_tick = self.next_bomb_tick.max(self.next_bullet_tick);
+                fire = Some(Fire { data, cost });
+            }
+        }
+        if input.mine && ready(self.next_bomb_tick) && self.bombs > 0 {
+            let level = (self.bombs - 1) as u16;
+            let data = shrapnel(WeaponData::new(bomb_kind, level).with_alternate(true), self.guns);
+            let cost = (s.landmine_fire_energy + s.landmine_fire_energy_upgrade * level as u32) as f32;
+            if cost < self.energy {
+                self.next_bomb_tick = now + s.bomb_fire_delay;
+                if !s.emp_bomb {
+                    self.next_bullet_tick = self.next_bomb_tick;
+                }
+                fire = Some(Fire { data, cost });
+            }
+        } else if input.bomb && ready(self.next_bomb_tick) && self.bombs > 0 && can_fast_shoot {
+            let level = (self.bombs - 1) as u16;
+            let data = shrapnel(WeaponData::new(bomb_kind, level), self.guns);
+            let cost = (s.bomb_fire_energy + s.bomb_fire_energy_upgrade * level as u32) as f32;
+            if cost < self.energy {
+                // Recoil.
+                let thrust = s.bomb_thrust as f32 / 100.0 * 10.0 / 16.0;
+                let h = heading(self.direction());
+                self.velocity = self.velocity.sub(h.scale(thrust));
+                self.next_bomb_tick = now + s.bomb_fire_delay;
+                if !s.emp_bomb {
+                    self.next_bullet_tick = self.next_bomb_tick;
+                }
+                fire = Some(Fire { data, cost });
+            }
+        }
+
+        let fire = fire?;
+        if in_safe {
+            self.velocity = Vec2::default();
+            return None;
+        }
+        Some(fire)
+    }
+
+    /// Pays for a weapon that was actually spawned.
+    pub fn commit_fire(&mut self, fire: Fire) {
+        self.energy -= fire.cost;
     }
 
     /// Sprite frame / heading index, 0..40.
@@ -91,7 +241,12 @@ impl Ship {
         let dt = TICK_SECONDS;
         let s = *self.stats(settings);
 
-        let rotation = s.initial_rotation as f32 / 400.0;
+        // An engine shutdown leaves only a slow turn and no thrust.
+        let shutdown = self.shutdown_ticks > 0;
+        self.shutdown_ticks = self.shutdown_ticks.saturating_sub(1);
+        self.super_ticks = self.super_ticks.saturating_sub(1);
+        self.shield_ticks = self.shield_ticks.saturating_sub(1);
+        let rotation = if shutdown { 40 } else { self.rotation } as f32 / 400.0;
         if input.left {
             self.orientation -= rotation * dt;
             if self.orientation < 0.0 {
@@ -109,7 +264,7 @@ impl Ship {
         // Energy rates are per 10 seconds.
         let ab_cost = s.afterburner_energy as f32 / 10.0 * dt;
         let afterburner = input.afterburner && thrusting && self.energy > ab_cost;
-        let thrust = if afterburner { s.maximum_thrust } else { s.initial_thrust } as f32 * (10.0 / 16.0) * dt;
+        let thrust = if shutdown { 0 } else if afterburner { s.maximum_thrust } else { self.thrust } as f32 * (10.0 / 16.0) * dt;
         let h = heading(self.direction());
         if input.forward {
             self.velocity.x += h.x * thrust;
@@ -120,7 +275,7 @@ impl Ship {
         }
         self.thrusting = thrusting;
 
-        let speed = if afterburner { s.maximum_speed } else { s.initial_speed };
+        let speed = if afterburner { s.maximum_speed } else { self.speed };
         let max = speed as f32 / 10.0 / 16.0;
         let len = self.velocity.length();
         if len > max {
@@ -133,7 +288,7 @@ impl Ship {
         if afterburner {
             self.energy -= ab_cost;
         }
-        self.energy = (self.energy + s.initial_recharge as f32 / 10.0 * dt).min(s.initial_energy as f32);
+        self.energy = (self.energy + self.recharge as f32 / 10.0 * dt).min(self.max_energy as f32);
 
         let radius = s.radius_tiles();
         let bounce = settings.bounce_factor.max(1);
@@ -291,6 +446,50 @@ mod tests {
         assert!(approx(s.velocity.x, -10.0 * f) && approx(s.velocity.y, 1.0 * f));
         // The ship is restored to its pre-collision position, so it never overlaps the wall.
         assert!(s.position.x + 14.0 / 16.0 <= 520.0 + 1.0 / 16.0);
+    }
+
+    #[test]
+    fn gun_respects_fire_delay_and_costs_energy() {
+        let settings = ArenaSettings::default();
+        let map = Map::empty();
+        let mut s = Ship::new(0, Vec2::new(512.5, 512.5), &settings);
+        let input = Input { gun: true, ..Default::default() };
+        let mut shots = 0;
+        for _ in 0..100 {
+            s.tick(&map, &settings, Input::default());
+            if let Some(f) = s.try_fire(input, &settings, false) {
+                assert_eq!(f.data.kind(), WeaponKind::Bullet);
+                assert_eq!(f.cost, 20.0);
+                s.commit_fire(f);
+                shots += 1;
+            }
+        }
+        // BulletFireDelay 25 ticks over 1 second: shots at ticks 1, 26, 51, 76.
+        assert_eq!(shots, 4);
+        assert!(s.energy < 1000.0);
+    }
+
+    #[test]
+    fn bomb_carries_shrapnel_and_needs_bomb_level() {
+        let settings = ArenaSettings::default();
+        let mut s = Ship::new(0, Vec2::new(512.5, 512.5), &settings);
+        s.shrapnel = 6;
+        s.guns = 2;
+        let f = s.try_fire(Input { bomb: true, ..Default::default() }, &settings, false).unwrap();
+        assert_eq!((f.data.kind(), f.data.shrap(), f.data.shrap_level(), f.data.alternate()), (WeaponKind::Bomb, 6, 1, false));
+        s.bombs = 0;
+        let mut s2 = s.clone();
+        s2.tick = 1000;
+        assert!(s2.try_fire(Input { bomb: true, ..Default::default() }, &settings, false).is_none());
+    }
+
+    #[test]
+    fn firing_in_safe_zone_stops_ship_instead() {
+        let settings = ArenaSettings::default();
+        let mut s = Ship::new(0, Vec2::new(512.5, 512.5), &settings);
+        s.velocity = Vec2::new(3.0, 0.0);
+        assert!(s.try_fire(Input { gun: true, ..Default::default() }, &settings, true).is_none());
+        assert_eq!(s.velocity, Vec2::default());
     }
 
     #[test]

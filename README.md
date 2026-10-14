@@ -23,7 +23,8 @@ cargo run --release -- --assets DIR --connect 127.0.0.1:5000 --name Pilot [--are
 cargo run --release --example bot -- 127.0.0.1:5000 BotName 30 0   # headless test pilot
 ```
 
-Controls: arrows fly (or move the camera while spectating), Shift = afterburner, 1–8 change ship,
+Controls: arrows fly (or move the camera while spectating), Shift = afterburner, Ctrl = guns,
+Tab = bomb, Shift+Tab = mine, Del = multifire, 1–8 change ship,
 S = spectate, Esc quits.
 
 Screenshot mode (for automated checks): `--screenshot out.png --frames 5 [--thrust-ticks N]`.

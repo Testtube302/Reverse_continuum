@@ -5,11 +5,13 @@ use std::collections::BTreeMap;
 use std::io;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use super::transport::{Event, State, Transport, now_tick};
 use crate::lvl::{Map, crc32};
 use crate::settings::ArenaSettings;
 use crate::sim::{Ship, Vec2};
+use crate::weapons::{Shooter, WeaponData};
 
 pub const SPECTATOR: u8 = 8;
 const POSITION_INTERVAL_TICKS: u32 = 10;
@@ -92,6 +94,37 @@ pub struct Player {
     /// Low 16 bits of the server timestamp of the last position update.
     last_timestamp: Option<u16>,
     pub position_updates: u32,
+    /// Killed and not yet seen again.
+    pub dead: bool,
+}
+
+/// A shot fired by another player, to be spawned by the weapon simulation.
+#[derive(Clone, Copy, Debug)]
+pub struct RemoteFire {
+    pub shooter: Shooter,
+    pub data: WeaponData,
+    /// Ticks the shot has already been in flight (latency compensation).
+    pub catch_up: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Death {
+    pub killer: u16,
+    pub killed: u16,
+    pub bounty: u16,
+    /// Prize left where the victim died (0 = none).
+    pub green: i8,
+}
+
+/// Prize traffic from the server for the game to act on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrizeEvent {
+    /// New shared prize seed; restart green spawning in lockstep.
+    Seed(u32),
+    /// Someone picked up the green on this tile.
+    Taken { x: u16, y: u16, prize: i16, pid: u16 },
+    /// The server granted us `count` of a prize.
+    Granted { prize: i16, count: u16 },
 }
 
 #[derive(Clone, Debug)]
@@ -107,10 +140,14 @@ pub struct Session {
     pub phase: Phase,
     pub pid: Option<u16>,
     pub players: BTreeMap<u16, Player>,
-    pub settings: Option<ArenaSettings>,
-    pub map: Option<Map>,
+    pub settings: Option<Arc<ArenaSettings>>,
+    pub map: Option<Arc<Map>>,
     pub map_name: Option<String>,
     pub chat: Vec<Chat>,
+    /// Shots and deaths received since the game last drained them.
+    pub remote_fires: Vec<RemoteFire>,
+    pub deaths: Vec<Death>,
+    pub prize_events: Vec<PrizeEvent>,
     /// Human-readable protocol log for diagnostics.
     pub log: Vec<String>,
     pub joined: bool,
@@ -136,6 +173,9 @@ impl Session {
             map: None,
             map_name: None,
             chat: Vec::new(),
+            remote_fires: Vec::new(),
+            deaths: Vec::new(),
+            prize_events: Vec::new(),
             log: Vec::new(),
             joined: false,
             spectate_at: Vec2::new(512.0, 512.0),
@@ -234,6 +274,35 @@ impl Session {
         self.transport.send_reliable(&[0x18, ship]);
     }
 
+    /// Reports picking up the green at (x, y).
+    pub fn send_take_green(&mut self, x: u16, y: u16, prize: i16) {
+        let mut p = vec![0x07];
+        p.extend_from_slice(&self.transport.server_tick().to_le_bytes());
+        p.extend_from_slice(&x.to_le_bytes());
+        p.extend_from_slice(&y.to_le_bytes());
+        p.extend_from_slice(&prize.to_le_bytes());
+        if self.settings.as_ref().is_some_and(|s| s.take_prize_reliable) {
+            self.transport.send_reliable(&p);
+        } else {
+            self.transport.send(&p);
+        }
+    }
+
+    /// Requests a change of team (frequency).
+    pub fn request_freq(&mut self, freq: u16) {
+        let mut p = vec![0x0F];
+        p.extend_from_slice(&freq.to_le_bytes());
+        self.transport.send_reliable(&p);
+    }
+
+    /// Tells the server we died, and who killed us.
+    pub fn send_death(&mut self, killer: u16, bounty: u16) {
+        let mut p = vec![0x05];
+        p.extend_from_slice(&killer.to_le_bytes());
+        p.extend_from_slice(&bounty.to_le_bytes());
+        self.transport.send_reliable(&p);
+    }
+
     pub fn send_public_chat(&mut self, text: &str) {
         let mut p = vec![0x06, 0x02, 0x00];
         p.extend_from_slice(&0u16.to_le_bytes());
@@ -242,14 +311,16 @@ impl Session {
         self.transport.send_reliable(&p);
     }
 
-    /// Sends our position if due. `ship` is None while spectating.
-    pub fn send_position(&mut self, ship: Option<&Ship>, force: bool) {
+    /// Sends our position if due. `ship` is None while spectating. A non-empty `weapon` is
+    /// always sent immediately (that's how shots reach other players). `dead` hides the ship
+    /// during the post-death enter delay.
+    pub fn send_position(&mut self, ship: Option<&Ship>, weapon: WeaponData, dead: bool, force: bool) {
         if !self.ready() {
             return;
         }
         let now = now_tick();
         let interval = if ship.is_some() { POSITION_INTERVAL_TICKS } else { SPECTATOR_POSITION_INTERVAL_TICKS };
-        if !force && now.wrapping_sub(self.last_position_sent) < interval {
+        if !force && weapon.0 == 0 && now.wrapping_sub(self.last_position_sent) < interval {
             return;
         }
         self.last_position_sent = now;
@@ -261,7 +332,7 @@ impl Session {
         }
         self.last_position_timestamp = ts;
 
-        let (dir, x, y, vx, vy, energy) = match ship {
+        let (dir, mut x, mut y, vx, vy, energy, bounty) = match ship {
             Some(s) => (
                 s.direction(),
                 (s.position.x * 16.0) as u16,
@@ -269,6 +340,7 @@ impl Session {
                 (s.velocity.x * 160.0) as i16,
                 (s.velocity.y * 160.0) as i16,
                 s.energy as u16,
+                s.bounty as u16,
             ),
             None => (
                 0,
@@ -277,8 +349,12 @@ impl Session {
                 0,
                 0,
                 0,
+                0,
             ),
         };
+        if dead && ship.is_some() {
+            (x, y) = (0xFFFF, 0xFFFF);
+        }
         let mut p = Vec::with_capacity(22);
         p.push(0x03);
         p.push(dir);
@@ -289,9 +365,9 @@ impl Session {
         p.push(0); // status flags
         p.extend_from_slice(&x.to_le_bytes());
         p.extend_from_slice(&vy.to_le_bytes());
-        p.extend_from_slice(&0u16.to_le_bytes()); // bounty
+        p.extend_from_slice(&bounty.to_le_bytes());
         p.extend_from_slice(&energy.to_le_bytes());
-        p.extend_from_slice(&0u16.to_le_bytes()); // weapon
+        p.extend_from_slice(&weapon.0.to_le_bytes());
         p[10] = p.iter().fold(0, |a, b| a ^ b);
         self.transport.send(&p);
     }
@@ -335,6 +411,7 @@ impl Session {
                         energy: 0,
                         last_timestamp: None,
                         position_updates: 0,
+                        dead: false,
                     };
                     self.note(format!("player entered: {} (pid {}, ship {})", pl.name, pl.pid, pl.ship));
                     self.players.insert(pl.pid, pl);
@@ -349,15 +426,35 @@ impl Session {
             }
             0x05 => self.on_large_position(p),
             0x28 => self.on_small_position(p),
+            0x06 => {
+                if let (Some(killer), Some(killed), Some(bounty)) = (u16_at(p, 2), u16_at(p, 4), u16_at(p, 6)) {
+                    if let Some(pl) = self.players.get_mut(&killed) {
+                        pl.dead = true;
+                    }
+                    let name = |pid| self.players.get(&pid).map(|p| p.name.clone()).unwrap_or_default();
+                    self.note(format!("{} killed by {} ({bounty})", name(killed), name(killer)));
+                    self.deaths.push(Death { killer, killed, bounty, green: p[1] as i8 });
+                }
+            }
             0x07 => {
                 if p.len() >= 5 {
                     let c = Chat { kind: p[1], pid: u16_at(p, 3).unwrap_or(0), text: cstr(&p[5..]) };
                     self.chat.push(c);
                 }
             }
+            0x08 => {
+                if let (Some(x), Some(y), Some(prize), Some(pid)) = (u16_at(p, 5), u16_at(p, 7), i16_at(p, 9), u16_at(p, 11)) {
+                    self.prize_events.push(PrizeEvent::Taken { x, y, prize, pid });
+                }
+            }
+            0x20 => {
+                if let (Some(count), Some(prize)) = (u16_at(p, 1), i16_at(p, 3)) {
+                    self.prize_events.push(PrizeEvent::Granted { prize, count });
+                }
+            }
             0x0F => match ArenaSettings::from_packet(p) {
                 Some(s) => {
-                    self.settings = Some(s);
+                    self.settings = Some(Arc::new(s));
                     self.note("received arena settings".into());
                     self.try_answer_security();
                 }
@@ -380,6 +477,9 @@ impl Session {
                 }
             }
             0x18 => {
+                if let Some(seed) = u32_at(p, 1) {
+                    self.prize_events.push(PrizeEvent::Seed(seed));
+                }
                 let key = u32_at(p, 13).unwrap_or(0);
                 if key != 0 {
                     self.pending_security_key = Some(key);
@@ -429,7 +529,7 @@ impl Session {
     fn load_map(&mut self, data: &[u8]) {
         match Map::parse(data) {
             Ok(m) => {
-                self.map = Some(m);
+                self.map = Some(Arc::new(m));
                 self.try_answer_security();
             }
             Err(e) => self.fail(format!("map parse error: {e}")),
@@ -474,10 +574,35 @@ impl Session {
             return;
         }
         let pid = u16_at(p, 8).unwrap();
+        let timestamp = u16_at(p, 2).unwrap();
+        let weapon = WeaponData(u16_at(p, 19).unwrap());
         let Some(pl) = self.players.get_mut(&pid) else { return };
-        if !Self::accept_timestamp(pl, u16_at(p, 2).unwrap()) {
+        // Shots are processed even when the packet's position is stale.
+        if weapon.0 != 0 && pl.ship < 8 {
+            let server_now = self.transport.server_tick();
+            let sent = (server_now & 0x7FFF_0000) | timestamp as u32;
+            let their_ping = p[14] as i32;
+            let my_ping = (self.transport.rtt / 2) as i32;
+            let elapsed = (server_now.wrapping_sub(sent) as i32) + their_ping + my_ping;
+            self.remote_fires.push(RemoteFire {
+                shooter: Shooter {
+                    pid,
+                    freq: pl.freq,
+                    ship: pl.ship,
+                    direction: p[1],
+                    x: u16_at(p, 4).unwrap() as u32,
+                    y: u16_at(p, 15).unwrap() as u32,
+                    vel_x: i16_at(p, 10).unwrap() as i32,
+                    vel_y: i16_at(p, 6).unwrap() as i32,
+                },
+                data: weapon,
+                catch_up: elapsed.clamp(0, 100) as u32,
+            });
+        }
+        if !Self::accept_timestamp(pl, timestamp) {
             return;
         }
+        pl.dead = false;
         pl.direction = p[1];
         pl.position = Vec2::new(u16_at(p, 4).unwrap() as f32 / 16.0, u16_at(p, 15).unwrap() as f32 / 16.0);
         pl.velocity = Vec2::new(i16_at(p, 10).unwrap() as f32 / 160.0, i16_at(p, 6).unwrap() as f32 / 160.0);
@@ -497,6 +622,7 @@ impl Session {
         if !Self::accept_timestamp(pl, u16_at(p, 2).unwrap()) {
             return;
         }
+        pl.dead = false;
         pl.direction = p[1];
         pl.bounty = p[7] as u16;
         pl.position = Vec2::new(u16_at(p, 4).unwrap() as f32 / 16.0, u16_at(p, 12).unwrap() as f32 / 16.0);

@@ -47,4 +47,39 @@ impl AssetDir {
         let rel = format!("graphics/{name}.bm2");
         bmp::decode(&self.read(&rel)?).map_err(|e| format!("{rel}: {e}"))
     }
+
+    /// Loads a graphic as RGBA (black = transparent), trying `.bm2`, `.png` then `.gif`.
+    pub fn graphic(&self, name: &str) -> Result<RgbaImage, String> {
+        if self.path(&format!("graphics/{name}.bm2")).is_file() {
+            let img = self.bm2(name)?;
+            return Ok(RgbaImage { width: img.width, height: img.height, pixels: img.to_rgba(true) });
+        }
+        for ext in ["png", "gif"] {
+            let rel = format!("graphics/{name}.{ext}");
+            if !self.path(&rel).is_file() {
+                continue;
+            }
+            let img = image::load_from_memory(&self.read(&rel)?).map_err(|e| format!("{rel}: {e}"))?.to_rgba8();
+            let (width, height) = img.dimensions();
+            let mut pixels = img.into_raw();
+            for px in pixels.chunks_exact_mut(4) {
+                if px[0] == 0 && px[1] == 0 && px[2] == 0 {
+                    px[3] = 0;
+                }
+            }
+            return Ok(RgbaImage { width, height, pixels });
+        }
+        Err(format!("graphics/{name}: no .bm2/.png/.gif found"))
+    }
+
+    /// Reads `sound/<name>.wa2` (an ordinary WAV file).
+    pub fn sound(&self, name: &str) -> Result<Vec<u8>, String> {
+        self.read(&format!("sound/{name}.wa2"))
+    }
+}
+
+pub struct RgbaImage {
+    pub width: u32,
+    pub height: u32,
+    pub pixels: Vec<u8>,
 }

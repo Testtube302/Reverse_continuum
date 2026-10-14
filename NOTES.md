@@ -18,7 +18,15 @@
       position send, security reply (settings+map checksums; exe checksum honestly 0).
       Verified live vs local SS.NET: tests/live_server.rs + examples/bot.rs + GUI/Wine screenshots.
       Remote ships are only extrapolated (no wall collision) — do full sim in M3.
-- [ ] M3 combat: bullets/bombs/mines, damage, death/respawn, prizes, sounds (`.wa2` = 8-bit WAV).
+- [x] M3 combat (2026-10-14): weapons.rs (bullets, bouncing, multifire, double barrel, bombs,
+      prox, mines, shrapnel, wall bounces, links, safe-zone removal, damage incl. bomb splash),
+      sim.rs firing rules (delays, energy, recoil, safe zone), game.rs (local damage → death →
+      C2S 0x05, S2C 0x06 deaths, enter delay respawn), prizes.rs (seeded green spawning in
+      lockstep, pickup C2S 0x07, S2C 0x08/0x20, all 28 prize effects, death greens, sharing),
+      sounds (all 75 .wa2 decode; examples/sound_check.rs). Live test: server-confirmed kill.
+      NOT yet: usable items (repel/burst/decoy/thor/brick/rocket/portal/warp key), stealth/
+      cloak/xradar/antiwarp effects, EMP shutdown, arena spawn settings, attach/turrets,
+      flags/balls, score packets.
 - [ ] M4 UI: HUD (energy font, radar, chat, stat box), menus, special tiles (170+, asteroids,
       station, wormhole, doors), stars background, LVZ. Screenshot-diff vs original under Wine.
 
@@ -38,6 +46,12 @@
   rotation/thrust/speed max @+40.., initial @+50.., AB energy @+70); BounceFactor @1272.
 - Servers relay ship positions only to players whose (spectator) position is nearby.
 - SS.NET security request every 60 s; SecurityKickOff=0 → exe mismatch is only logged.
+- Damage settings arrive ×1000 (BulletDamageLevel=100 in conf → 100000 in packet).
+- Arena conf overrides svs: arenas/(default)/arena.conf sets PrizeFactor=10000, PrizeDelay=700,
+  MinimumVirtual=10. Center of smallmape.lvl is a safe zone (no firing; weapons vanish).
+- Bombs block guns for BombFireDelay unless EmpBomb (looks like "guns don't fire" — it's correct).
+- Keys (Continuum defaults): Ctrl gun, Tab bomb, Shift+Tab mine, Del multifire, Shift afterburner.
+- `cargo build` doesn't rebuild examples — use --all-targets before running examples/bot.
 
 ## Local test environment (this Mac)
 - Test zone: ~/sszone-local/SubspaceServer-4.0.0-osx-arm64 (GPLv2 — run it, don't copy code).
