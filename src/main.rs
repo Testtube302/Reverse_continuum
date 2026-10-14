@@ -2,11 +2,13 @@ use std::collections::HashMap;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::PathBuf;
 
+mod hud;
+
 use aicontinuum::assets::AssetDir;
 use aicontinuum::game::{EffectKind, Game};
 use aicontinuum::lvl::{Map, TILE_PIXELS};
 use aicontinuum::net::session::{Config, Phase, SPECTATOR, Session};
-use aicontinuum::settings::{ArenaSettings, SHIP_NAMES};
+use aicontinuum::settings::ArenaSettings;
 use aicontinuum::sim::{Input, TICK_SECONDS, Vec2};
 use aicontinuum::weapons::{Weapon, WeaponKind};
 use macroquad::audio::{PlaySoundParams, Sound, load_sound_from_bytes, play_sound};
@@ -33,6 +35,8 @@ struct Args {
     /// Scripted input for screenshot runs: hold the gun and bomb keys.
     script_fire: bool,
     mute: bool,
+    /// Offline: start the ship at this tile position.
+    at: Option<Vec2>,
 }
 
 fn parse_args() -> Args {
@@ -48,6 +52,7 @@ fn parse_args() -> Args {
         script_thrust_ticks: 0,
         script_fire: false,
         mute: false,
+        at: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -74,6 +79,11 @@ fn parse_args() -> Args {
             "--thrust-ticks" => args.script_thrust_ticks = value().parse().unwrap_or(0),
             "--script-fire" => args.script_fire = true,
             "--mute" => args.mute = true,
+            "--at" => {
+                let v = value();
+                let (x, y) = v.split_once(',').unwrap_or_else(|| panic!("--at x,y"));
+                args.at = Some(Vec2::new(x.trim().parse().expect("x"), y.trim().parse().expect("y")));
+            }
             other => eprintln!("ignoring unknown argument {other}"),
         }
     }
@@ -136,6 +146,12 @@ struct Graphics {
     explode2: Sheet,
     empburst: Sheet,
     prizes: Sheet,
+    goal: Sheet,
+    over1: Sheet,
+    over2: Sheet,
+    over3: Sheet,
+    over4: Sheet,
+    over5: Sheet,
 }
 
 impl Graphics {
@@ -151,6 +167,12 @@ impl Graphics {
             explode2: Sheet::load(assets, "explode2", 80, 80),
             empburst: Sheet::load(assets, "empburst", 80, 80),
             prizes: Sheet::load(assets, "prizes", 16, 16),
+            goal: Sheet::load(assets, "goal", 16, 16),
+            over1: Sheet::load(assets, "over1", 16, 16),
+            over2: Sheet::load(assets, "over2", 32, 32),
+            over3: Sheet::load(assets, "over3", 16, 16),
+            over4: Sheet::load(assets, "over4", 96, 96),
+            over5: Sheet::load(assets, "over5", 80, 80),
         }
     }
 }
@@ -178,22 +200,81 @@ impl Sounds {
     }
 }
 
+/// The map tileset twice: opaque (ids up to 172, black drawn black) and with black transparent
+/// (ids above 172), matching how the original draws each range.
 struct Tiles {
-    tex: Texture2D,
+    opaque: Texture2D,
+    keyed: Texture2D,
 }
 
 impl Tiles {
     fn for_map(map: &Map, assets: &AssetDir) -> Self {
-        let rgba = match &map.tileset {
-            Some(t) => (t.width, t.height, t.to_rgba(true)),
+        let (w, h, mut rgba) = match &map.tileset {
+            Some(t) => (t.width, t.height, t.to_rgba(false)),
             None => {
                 let img = assets.graphic("tiles").unwrap_or_else(|e| die(e));
                 (img.width, img.height, img.pixels)
             }
         };
-        let tex = Texture2D::from_rgba8(rgba.0 as u16, rgba.1 as u16, &rgba.2);
-        tex.set_filter(FilterMode::Nearest);
-        Self { tex }
+        let tex = |px: &[u8]| {
+            let t = Texture2D::from_rgba8(w as u16, h as u16, px);
+            t.set_filter(FilterMode::Nearest);
+            t
+        };
+        let keyed = tex(&rgba);
+        for p in rgba.chunks_exact_mut(4) {
+            p[3] = 255;
+        }
+        Self { opaque: tex(&rgba), keyed }
+    }
+
+    fn draw(&self, id: u8, x: f32, y: f32) {
+        let idx = (id - 1) as u32;
+        let src = Rect::new(
+            ((idx % TILESET_COLUMNS) * TILE_PIXELS) as f32,
+            ((idx / TILESET_COLUMNS) * TILE_PIXELS) as f32,
+            TILE_PIXELS as f32,
+            TILE_PIXELS as f32,
+        );
+        let tex = if id > 172 { &self.keyed } else { &self.opaque };
+        draw_texture_ex(tex, x, y, WHITE, DrawTextureParams { source: Some(src), ..Default::default() });
+    }
+}
+
+/// Fly-over tiles are drawn above ships.
+fn is_fly_over(id: u8) -> bool {
+    (176..=190).contains(&id)
+}
+
+/// Tiles drawn from the tileset (flags and goals are animated sprites instead).
+fn is_tileset_tile(id: u8) -> bool {
+    id != 0 && id != 170 && id != 172 && id <= TILESET_COUNT
+}
+
+/// Two parallax layers of single-pixel stars: far (dim, 1/4 speed) and near (bright, 1/2 speed).
+/// Star placement is our own deterministic hash; the original's star layout can't be reproduced.
+fn draw_stars(cam_px: (f32, f32), sw: f32, sh: f32) {
+    const CELL: i64 = 1024;
+    const PER_CELL: u64 = 100;
+    for (speed, grey, layer) in [(0.25f32, 0x60u8, 1u64), (0.5, 0xB8, 0)] {
+        let color = Color::from_rgba(grey, grey, grey, 255);
+        let (ox, oy) = ((cam_px.0 * speed) as i64, (cam_px.1 * speed) as i64);
+        for cy in (oy.div_euclid(CELL))..=((oy + sh as i64).div_euclid(CELL)) {
+            for cx in (ox.div_euclid(CELL))..=((ox + sw as i64).div_euclid(CELL)) {
+                let mut h = (cx as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (cy as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F) ^ layer;
+                for _ in 0..PER_CELL {
+                    h ^= h >> 33;
+                    h = h.wrapping_mul(0xFF51_AFD7_ED55_8CCD);
+                    h ^= h >> 29;
+                    let (sx, sy) = ((h % CELL as u64) as i64, ((h >> 20) % CELL as u64) as i64);
+                    let x = cx * CELL + sx - ox;
+                    let y = cy * CELL + sy - oy;
+                    if x >= 0 && y >= 0 && (x as f32) < sw && (y as f32) < sh {
+                        draw_rectangle(x as f32, y as f32, 1.0, 1.0, color);
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -217,6 +298,7 @@ async fn main() {
     let args = parse_args();
     let assets = AssetDir::locate(args.assets.as_deref()).unwrap_or_else(|e| die(e));
     let gfx = Graphics::load(&assets);
+    let mut hud = hud::Hud::load(&assets);
     let mut sounds = Sounds { clips: HashMap::new(), muted: args.mute || args.screenshot.is_some() };
 
     let mut game = match args.connect {
@@ -240,7 +322,12 @@ async fn main() {
                 Some(p) => std::fs::read(p).map_err(|e| e.to_string()).and_then(|d| Map::parse(&d)),
                 None => Ok(Map::empty()),
             };
-            Game::offline(map.unwrap_or_else(|e| die(e)), ArenaSettings::default(), args.ship.unwrap_or(0))
+            let mut g = Game::offline(map.unwrap_or_else(|e| die(e)), ArenaSettings::default(), args.ship.unwrap_or(0));
+            if let (Some(at), Some(ship)) = (args.at, g.ship.as_mut()) {
+                ship.position = at;
+                g.camera = at;
+            }
+            g
         }
     };
 
@@ -252,9 +339,39 @@ async fn main() {
     let mut fire_held = false;
 
     loop {
+        // Chat entry: Enter opens/sends, Esc cancels; while typing, keys go to the message.
+        let typing = hud.chat_input.is_some();
         if is_key_pressed(KeyCode::Escape) {
-            break;
+            if typing {
+                hud.chat_input = None;
+            } else {
+                break;
+            }
         }
+        if is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::KpEnter) {
+            match hud.chat_input.take() {
+                Some(text) if !text.trim().is_empty() => {
+                    if let Some(s) = game.session.as_mut() {
+                        s.send_public_chat(&text);
+                    } else {
+                        game.notices.push(text);
+                    }
+                }
+                Some(_) => {}
+                None => hud.chat_input = Some(String::new()),
+            }
+        }
+        while let Some(c) = get_char_pressed() {
+            if let Some(input) = hud.chat_input.as_mut() {
+                if (' '..='~').contains(&c) && input.len() < 200 && typing {
+                    input.push(c);
+                }
+            }
+        }
+        if hud.chat_input.is_some() && is_key_pressed(KeyCode::Backspace) {
+            hud.chat_input.as_mut().unwrap().pop();
+        }
+        let typing = hud.chat_input.is_some();
         game.frame();
 
         let ready = game.world().is_some();
@@ -268,13 +385,13 @@ async fn main() {
             }
         }
         let ship_keys = [KeyCode::Key1, KeyCode::Key2, KeyCode::Key3, KeyCode::Key4, KeyCode::Key5, KeyCode::Key6, KeyCode::Key7, KeyCode::Key8];
-        if let Some(i) = ship_keys.iter().position(|k| is_key_pressed(*k)) {
+        if let Some(i) = ship_keys.iter().position(|k| is_key_pressed(*k)).filter(|_| !typing) {
             game.request_ship(i as u8);
         }
-        if is_key_pressed(KeyCode::S) && !is_key_down(KeyCode::Tab) {
+        if !typing && is_key_pressed(KeyCode::S) && !is_key_down(KeyCode::Tab) {
             game.request_ship(SPECTATOR);
         }
-        if is_key_pressed(KeyCode::Delete) {
+        if !typing && is_key_pressed(KeyCode::Delete) {
             if let Some(ship) = game.ship.as_mut() {
                 ship.multifire = !ship.multifire;
                 game.notices.push(format!("Multifire {}", if ship.multifire { "on" } else { "off" }));
@@ -296,7 +413,7 @@ async fn main() {
                     scripted_ticks += 1;
                 }
             } else {
-                let mut input = read_input();
+                let mut input = if typing { Input::default() } else { read_input() };
                 if args.script_fire {
                     input.gun = true;
                     input.bomb = !fire_held;
@@ -316,7 +433,7 @@ async fn main() {
             if fired_any.0 == 0 {
                 game.send_updates(fired_any);
             }
-            draw_world(&game, tiles.as_ref().unwrap(), &gfx);
+            draw_world(&game, tiles.as_ref().unwrap(), &gfx, &mut hud);
         } else {
             clear_background(BLACK);
             let status = match game.session.as_ref().map(|s| &s.phase) {
@@ -376,7 +493,7 @@ fn draw_weapon(gfx: &Graphics, w: &Weapon, x: f32, y: f32) {
     }
 }
 
-fn draw_world(game: &Game, tiles: &Tiles, gfx: &Graphics) {
+fn draw_world(game: &Game, tiles: &Tiles, gfx: &Graphics, hud: &mut hud::Hud) {
     let (map, _settings) = game.world().unwrap();
     clear_background(BLACK);
     let (sw, sh) = (screen_width(), screen_height());
@@ -392,27 +509,34 @@ fn draw_world(game: &Game, tiles: &Tiles, gfx: &Graphics) {
     let first_ty = (cam_y / tile).floor() as i32;
     let cols = (sw / tile) as i32 + 2;
     let rows = (sh / tile) as i32 + 2;
-    for ty in first_ty..first_ty + rows {
-        for tx in first_tx..first_tx + cols {
-            let id = map.tile(tx, ty);
-            if id == 0 || id > TILESET_COUNT {
-                continue;
-            }
-            let idx = (id - 1) as u32;
-            let src = Rect::new(
-                ((idx % TILESET_COLUMNS) * TILE_PIXELS) as f32,
-                ((idx / TILESET_COLUMNS) * TILE_PIXELS) as f32,
-                tile,
-                tile,
-            );
-            draw_texture_ex(
-                &tiles.tex,
-                tx as f32 * tile - cam_x,
-                ty as f32 * tile - cam_y,
-                WHITE,
-                DrawTextureParams { source: Some(src), ..Default::default() },
-            );
+    draw_stars((cam_x, cam_y), sw, sh);
+
+    let visible_tiles = || (first_ty..first_ty + rows).flat_map(move |ty| (first_tx..first_tx + cols).map(move |tx| (tx, ty)));
+    for (tx, ty) in visible_tiles() {
+        let id = map.tile(tx, ty);
+        if is_tileset_tile(id) && !is_fly_over(id) {
+            tiles.draw(id, tx as f32 * tile - cam_x, ty as f32 * tile - cam_y);
         }
+    }
+
+    // Animated map objects, drawn from their top-left tile. Extend the view for big ones.
+    let t = get_time() as f32;
+    for r in &map.records {
+        let (rx, ry) = (r.x as i32, r.y as i32);
+        if rx < first_tx - 6 || rx > first_tx + cols || ry < first_ty - 6 || ry > first_ty + rows {
+            continue;
+        }
+        let (sheet, period, first, count) = match r.id {
+            172 => (&gfx.goal, 0.5, gfx.goal.frame_count() / 2, gfx.goal.frame_count() / 2),
+            216 => (&gfx.over1, 1.5, 0, gfx.over1.frame_count()),
+            217 => (&gfx.over2, 1.5, 0, gfx.over2.frame_count()),
+            218 => (&gfx.over3, 1.5, 0, gfx.over3.frame_count()),
+            219 => (&gfx.over4, 1.0, 0, gfx.over4.frame_count()),
+            220 => (&gfx.over5, 2.5, 0, gfx.over5.frame_count()),
+            _ => continue,
+        };
+        let frame = first + ((t % period) / period * count as f32) as u32 % count.max(1);
+        sheet.draw(frame, rx as f32 * tile - cam_x, ry as f32 * tile - cam_y);
     }
 
     // Greens: 10-frame animation, one cycle per second.
@@ -434,14 +558,21 @@ fn draw_world(game: &Game, tiles: &Tiles, gfx: &Graphics) {
             }
             let (x, y) = to_screen(p.position);
             gfx.ships.draw_centered(p.ship as u32 * 40 + p.direction.min(39) as u32, x, y);
-            // Temporary label until the original fonts are implemented.
-            draw_text(&p.name, x + 18.0, y + 18.0, 14.0, YELLOW);
+            let team = s.me().is_some_and(|m| m.freq == p.freq);
+            hud.name_label(&p.name, p.bounty, team, (x, y));
         }
     }
 
     if let (Some(ship), true) = (&game.ship, game.alive()) {
         let (x, y) = to_screen(ship.position);
         gfx.ships.draw_centered(ship.ship as u32 * 40 + ship.direction() as u32, x, y);
+    }
+
+    for (tx, ty) in visible_tiles() {
+        let id = map.tile(tx, ty);
+        if is_tileset_tile(id) && is_fly_over(id) {
+            tiles.draw(id, tx as f32 * tile - cam_x, ty as f32 * tile - cam_y);
+        }
     }
 
     for e in &game.effects {
@@ -456,30 +587,5 @@ fn draw_world(game: &Game, tiles: &Tiles, gfx: &Graphics) {
         sheet.draw_centered((e.age * n / e.kind.duration()).min(n - 1), x, y);
     }
 
-    // Temporary debug readout until the real HUD is implemented.
-    let info = match &game.ship {
-        Some(ship) if game.dead_ticks > 0 => format!("{}  respawning in {:.1}s", SHIP_NAMES[ship.ship as usize], game.dead_ticks as f32 / 100.0),
-        Some(ship) => format!(
-            "{}  x:{} y:{}  speed:{:.0}  energy:{:.0}  guns L{} bombs L{}{}  K/D {}/{}",
-            SHIP_NAMES[ship.ship as usize],
-            ship.position.x as i32,
-            ship.position.y as i32,
-            ship.velocity.length() * 160.0,
-            ship.energy,
-            ship.guns,
-            ship.bombs,
-            if ship.multifire { " multi" } else { "" },
-            game.kills,
-            game.deaths
-        ),
-        None => format!("Spectating  x:{} y:{}  (1-8 to enter a ship)", camera.x as i32, camera.y as i32),
-    };
-    draw_text(&info, 8.0, 16.0, 16.0, GREEN);
-    if let Some(s) = &game.session {
-        let arena = s.map_name.clone().unwrap_or_default();
-        draw_text(&format!("{} players here  map {arena}  ping {}ms", s.players.len(), s.transport.rtt * 10), 8.0, 32.0, 16.0, GREEN);
-    }
-    for (i, n) in game.notices.iter().rev().take(4).enumerate() {
-        draw_text(n, 8.0, sh - 12.0 - i as f32 * 16.0, 16.0, YELLOW);
-    }
+    hud.draw(game);
 }

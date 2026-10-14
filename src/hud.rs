@@ -1,0 +1,376 @@
+//! Heads-up display drawn with the original graphics: bitmap font text, energy digits and bar,
+//! item/weapon icons, radar and chat. Layout follows the nullspace client's reconstruction of
+//! Continuum's screen positions.
+
+use aicontinuum::assets::AssetDir;
+use aicontinuum::game::Game;
+use aicontinuum::lvl::{FIRST_DOOR, LAST_DOOR, TILE_GOAL, TILE_SAFE};
+use aicontinuum::sim::{Ship, Vec2};
+use macroquad::prelude::*;
+
+pub const FONT_W: f32 = 8.0;
+pub const FONT_H: f32 = 12.0;
+const RADAR_BORDER: f32 = 6.0;
+
+/// The font's eight colour blocks, in sheet order.
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextColor {
+    White = 0,
+    Green,
+    Blue,
+    DarkRed,
+    Yellow,
+    Fuchsia,
+    Red,
+    Pink,
+}
+
+fn load_texture(assets: &AssetDir, name: &str) -> Texture2D {
+    let img = assets.graphic(name).unwrap_or_else(|e| panic!("{e}"));
+    let t = Texture2D::from_rgba8(img.width as u16, img.height as u16, &img.pixels);
+    t.set_filter(FilterMode::Nearest);
+    t
+}
+
+fn blit(tex: &Texture2D, src: Rect, x: f32, y: f32) {
+    draw_texture_ex(tex, x.floor(), y.floor(), WHITE, DrawTextureParams { source: Some(src), ..Default::default() });
+}
+
+/// Draws `src` stretched to `w`×`h` (used for 1-pixel colour swatches and gradients).
+fn blit_scaled(tex: &Texture2D, src: Rect, x: f32, y: f32, w: f32, h: f32) {
+    if w <= 0.0 || h <= 0.0 {
+        return;
+    }
+    draw_texture_ex(
+        tex,
+        x.floor(),
+        y.floor(),
+        WHITE,
+        DrawTextureParams { source: Some(src), dest_size: Some(vec2(w, h)), ..Default::default() },
+    );
+}
+
+pub struct Hud {
+    font: Texture2D,
+    energy_font: Texture2D,
+    healthbar: Texture2D,
+    gradient: Texture2D,
+    icons: Texture2D,
+    icon_counts: Texture2D,
+    colors: Texture2D,
+    /// Radar window texture and its size.
+    radar: Option<(Texture2D, u32, usize)>,
+    /// Whole-map radar image for zooms where it's under 1024 px, keyed by (map, size).
+    radar_small: Option<((usize, u32), Vec<[u8; 3]>)>,
+    pub chat_input: Option<String>,
+}
+
+/// Rows of `colors.png` used for radar and borders (column 0 = static colour).
+#[derive(Clone, Copy)]
+enum ColorRow {
+    Border1 = 1,
+    Border2 = 2,
+    Border3 = 3,
+    RadarPrize = 23,
+    RadarSelf = 27,
+    RadarTeam = 29,
+    RadarEnemy = 34,
+}
+
+impl Hud {
+    pub fn load(assets: &AssetDir) -> Self {
+        Self {
+            font: load_texture(assets, "tallfont"),
+            energy_font: load_texture(assets, "engyfont"),
+            healthbar: load_texture(assets, "hlthbar"),
+            gradient: load_texture(assets, "gradient"),
+            icons: load_texture(assets, "Icons"),
+            icon_counts: load_texture(assets, "icondoor"),
+            colors: load_texture(assets, "colors"),
+            radar: None,
+            radar_small: None,
+            chat_input: None,
+        }
+    }
+
+    /// Draws text with the 8×12 bitmap font; returns the width drawn.
+    pub fn text(&self, s: &str, color: TextColor, x: f32, y: f32) -> f32 {
+        // 48 glyphs per row; each colour is a block of 96 glyphs (space..DEL).
+        let mut cx = x;
+        for ch in s.chars() {
+            let c = ch as u32;
+            if (32..127).contains(&c) {
+                let i = (c - 32) + 96 * color as u32;
+                let src = Rect::new((i % 48) as f32 * FONT_W, (i / 48) as f32 * FONT_H, FONT_W, FONT_H);
+                blit(&self.font, src, cx, y);
+            }
+            cx += FONT_W;
+        }
+        cx - x
+    }
+
+    fn swatch(&self, row: ColorRow, x: f32, y: f32, w: f32, h: f32) {
+        blit_scaled(&self.colors, Rect::new(0.0, row as u32 as f32, 1.0, 1.0), x, y, w, h);
+    }
+
+    fn icon(&self, index: u32, x: f32, y: f32) {
+        let cols = (self.icons.width() / 26.0) as u32;
+        blit(&self.icons, Rect::new((index % cols) as f32 * 26.0, (index / cols) as f32 * 24.0, 26.0, 24.0), x, y);
+    }
+
+    /// The 4-pixel "empty slot" strips cut from the bottom row of Icons.png.
+    fn empty_icon(&self, right_side: bool, x: f32, y: f32) {
+        let sx = if right_side { 78.0 } else { 152.0 };
+        blit(&self.icons, Rect::new(sx, 120.0, 4.0, 24.0), x, y);
+    }
+
+    pub fn draw(&mut self, game: &Game) {
+        let (sw, sh) = (screen_width(), screen_height());
+        if let (Some(ship), true) = (&game.ship, game.alive()) {
+            let settings = game.world().unwrap().1;
+            let max_energy = settings.ships[ship.ship as usize].maximum_energy.max(1);
+            self.energy_display(ship, max_energy, sw);
+            self.indicators(ship, sw, sh);
+        }
+        self.radar(game, sw, sh);
+        self.chat(game, sw, sh);
+    }
+
+    fn energy_display(&self, ship: &Ship, max_energy: u32, sw: f32) {
+        // Digits at the top right, right-aligned, 16×24 each.
+        let mut energy = ship.energy.max(0.0) as u32;
+        let mut n = 0;
+        loop {
+            n += 1;
+            let d = energy % 10;
+            blit(&self.energy_font, Rect::new(d as f32 * 16.0, 0.0, 16.0, 24.0), sw - n as f32 * 16.0, 0.0);
+            energy /= 10;
+            if energy == 0 {
+                break;
+            }
+        }
+
+        // Energy bar: grey track for this ship's capacity, coloured fill for current energy,
+        // mirrored either side of the centre, under the health bar frame.
+        let (bar_w, bar_h) = (116.0, 28.0);
+        let center = vec2((sw / 2.0).floor(), bar_h / 2.0);
+        let capacity = ship.max_energy as f32 / max_energy as f32 * 240.0;
+        let frac = (ship.energy / ship.max_energy.max(1) as f32).clamp(0.0, 1.0);
+        let view = frac * capacity;
+        let row = if frac > 0.5 { 0.0 } else if frac > 0.25 { 1.0 } else { 2.0 };
+        let anim = ((get_time() * 10.0) as u32 % 14) as f32;
+        let full = Rect::new(5.0, 0.0, 1.0, 1.0);
+        let track = Rect::new(0.0, 0.0, 1.0, 1.0);
+        blit_scaled(&self.gradient, full, center.x - 240.0, center.y - 4.0, 240.0, 2.0);
+        blit_scaled(&self.gradient, full, center.x, center.y - 4.0, 240.0, 2.0);
+        blit_scaled(&self.gradient, track, center.x - capacity, center.y - 4.0, capacity, 2.0);
+        blit_scaled(&self.gradient, track, center.x, center.y - 4.0, capacity, 2.0);
+        let fill = Rect::new(anim, row, 1.0, 1.0);
+        blit_scaled(&self.gradient, fill, center.x - view, center.y, view, 6.0);
+        blit_scaled(&self.gradient, fill, center.x, center.y, view, 6.0);
+        blit(&self.healthbar, Rect::new(0.0, 0.0, bar_w, bar_h), center.x - bar_w / 2.0, 0.0);
+    }
+
+    fn indicators(&self, ship: &Ship, sw: f32, sh: f32) {
+        let top = (sh * 0.57 + 1.0).floor() - 25.0 * 4.0;
+        // Left column: items (burst, repel, decoy, thor, brick, rocket, portal) with counts.
+        // ship.items order: repel, burst, decoy, thor, brick, rocket, portal.
+        let left = [(ship.items[1], 30), (ship.items[0], 31), (ship.items[2], 40), (ship.items[3], 41), (ship.items[4], 42), (ship.items[5], 43), (ship.items[6], 46)];
+        for (i, (count, icon)) in left.iter().enumerate() {
+            let y = top + i as f32 * 25.0;
+            if *count > 0 {
+                self.icon(*icon, 0.0, y);
+                if *count > 1 {
+                    let c = (*count).min(10);
+                    blit(&self.icon_counts, Rect::new(c as f32 * 11.0, 0.0, 11.0, 13.0), 23.0, y + 5.0);
+                }
+            } else {
+                self.empty_icon(false, 0.0, y);
+            }
+        }
+
+        // Right column: guns, bombs, stealth, cloak, x-radar, antiwarp.
+        let x = sw - 26.0;
+        let gun = (ship.guns > 0).then(|| {
+            let mut start = 0;
+            if ship.caps.multifire {
+                start = if ship.multifire { 3 } else { 6 };
+            }
+            if ship.caps.bouncing_bullets {
+                start += 9;
+            }
+            start + ship.guns - 1
+        });
+        let bomb = (ship.bombs > 0).then(|| {
+            let start = match (ship.caps.proximity, ship.shrapnel > 0) {
+                (false, false) => 18,
+                (true, false) => 21,
+                (false, true) => 24,
+                (true, true) => 27,
+            };
+            start + ship.bombs - 1
+        });
+        // Toggle states aren't implemented yet, so abilities show as available-but-off.
+        let abilities = [ship.caps.stealth.then_some(33), ship.caps.cloak.then_some(35), ship.caps.xradar.then_some(37), ship.caps.antiwarp.then_some(39)];
+        for (i, icon) in [gun, bomb].into_iter().chain(abilities).enumerate() {
+            let y = top + i as f32 * 25.0;
+            match icon {
+                Some(index) => self.icon(index, x, y),
+                None => self.empty_icon(true, x + 22.0, y),
+            }
+        }
+    }
+
+    fn radar_color(id: u8) -> [u8; 3] {
+        match id {
+            TILE_SAFE => [0x18, 0x52, 0x18],
+            TILE_GOAL => [0xFF, 0x39, 0x08],
+            FIRST_DOOR..=LAST_DOOR => [0xAD, 0xAD, 0xAD],
+            0 | 242.. => [0x0A, 0x19, 0x0A],
+            _ => [0x5A, 0x5A, 0x5A],
+        }
+    }
+
+    fn radar(&mut self, game: &Game, sw: f32, sh: f32) {
+        let Some((map, settings)) = game.world() else { return };
+        let width = sw as u32;
+        // The radar is a 1:1 window onto a virtual whole-map image `full_dim` pixels across,
+        // centred on the camera and clamped to the map edges.
+        let full_dim = width * 8 / settings.map_zoom_factor.max(1);
+        let view = (width / 6 / 4) * 4;
+        let dim = view as f32;
+        let center = game.camera;
+        let limit = full_dim as i32 - view as i32;
+        let min_x = ((center.x * full_dim as f32 / 1024.0) as i32 - view as i32 / 2).clamp(0, limit);
+        let min_y = ((center.y * full_dim as f32 / 1024.0) as i32 - view as i32 / 2).clamp(0, limit);
+
+        let v = view as usize;
+        let mut px = vec![0u8; v * v * 4];
+        if full_dim < 1024 {
+            // Several tiles share a pixel: walls overwrite empty space so thin walls survive.
+            // The whole small image is built once per map/zoom and windowed each frame.
+            let key = (map as *const _ as usize, full_dim);
+            if self.radar_small.as_ref().is_none_or(|(k, _)| *k != key) {
+                let d = full_dim as usize;
+                let mut img = vec![Self::radar_color(0); d * d];
+                for y in 0..1024i32 {
+                    let dy = (y as f32 / 1024.0 * full_dim as f32) as usize;
+                    for x in 0..1024i32 {
+                        let id = map.tile(x, y);
+                        if id != 0 && id <= 241 {
+                            let dx = (x as f32 / 1024.0 * full_dim as f32) as usize;
+                            img[dy * d + dx] = Self::radar_color(id);
+                        }
+                    }
+                }
+                self.radar_small = Some((key, img));
+            }
+            let img = &self.radar_small.as_ref().unwrap().1;
+            let d = full_dim as usize;
+            for (i, p) in px.chunks_exact_mut(4).enumerate() {
+                let (gx, gy) = (min_x as usize + i % v, min_y as usize + i / v);
+                let [r, g, b] = img.get(gy * d + gx).copied().unwrap_or(Self::radar_color(0));
+                p.copy_from_slice(&[r, g, b, 255]);
+            }
+        } else {
+            for (i, p) in px.chunks_exact_mut(4).enumerate() {
+                let gx = (min_x as u64 + (i % v) as u64) * 1024 / full_dim as u64;
+                let gy = (min_y as u64 + (i / v) as u64) * 1024 / full_dim as u64;
+                let [r, g, b] = Self::radar_color(map.tile(gx as i32, gy as i32));
+                p.copy_from_slice(&[r, g, b, 255]);
+            }
+        }
+        let reuse = self.radar.as_ref().is_some_and(|(_, w, _)| *w == view);
+        if !reuse {
+            let t = Texture2D::from_rgba8(view as u16, view as u16, &px);
+            t.set_filter(FilterMode::Nearest);
+            self.radar = Some((t, view, 0));
+        } else {
+            self.radar.as_ref().unwrap().0.update(&Image { bytes: px, width: view as u16, height: view as u16 });
+        }
+        let tex = &self.radar.as_ref().unwrap().0;
+        let pos = vec2(sw - dim - RADAR_BORDER, sh - dim - RADAR_BORDER);
+        draw_texture(tex, pos.x, pos.y, WHITE);
+
+        let world_min = vec2(min_x as f32, min_y as f32) * 1024.0 / full_dim as f32;
+        let world_dim = view as f32 * 1024.0 / full_dim as f32;
+        let dot = |hud: &Self, p: Vec2, row: ColorRow, size: f32| {
+            let (u, v) = ((p.x - world_min.x) / world_dim, (p.y - world_min.y) / world_dim);
+            if (0.0..1.0).contains(&u) && (0.0..1.0).contains(&v) {
+                hud.swatch(row, pos.x + dim * u, pos.y + dim * v, size, size);
+            }
+        };
+        for g in &game.greens.list {
+            dot(self, Vec2::new(g.x as f32, g.y as f32), ColorRow::RadarPrize, 2.0);
+        }
+        if let Some(s) = &game.session {
+            let my_freq = s.me().map(|m| m.freq);
+            for p in s.players.values() {
+                if Some(p.pid) == s.pid || p.ship >= 8 || p.dead || p.position_updates == 0 {
+                    continue;
+                }
+                let row = if Some(p.freq) == my_freq { ColorRow::RadarTeam } else { ColorRow::RadarEnemy };
+                dot(self, p.position, row, 2.0);
+            }
+        }
+        if let (Some(ship), true) = (&game.ship, game.alive()) {
+            dot(self, ship.position, ColorRow::RadarSelf, 2.0);
+        }
+
+        // Three-pixel bevelled border.
+        let (x0, y0) = (pos.x, pos.y);
+        self.swatch(ColorRow::Border1, x0 - 1.0, y0 - 1.0, 1.0, dim + 2.0);
+        self.swatch(ColorRow::Border1, x0 + dim, y0 - 1.0, 1.0, dim + 2.0);
+        self.swatch(ColorRow::Border1, x0 - 1.0, y0 - 1.0, dim + 2.0, 1.0);
+        self.swatch(ColorRow::Border1, x0 - 1.0, y0 + dim, dim + 2.0, 1.0);
+        self.swatch(ColorRow::Border2, x0 - 2.0, y0 - 2.0, 1.0, dim + 4.0);
+        self.swatch(ColorRow::Border2, x0 + dim + 1.0, y0 - 2.0, 1.0, dim + 4.0);
+        self.swatch(ColorRow::Border2, x0 - 2.0, y0 - 2.0, dim + 4.0, 1.0);
+        self.swatch(ColorRow::Border2, x0 - 2.0, y0 + dim + 1.0, dim + 4.0, 1.0);
+        self.swatch(ColorRow::Border3, x0 - 3.0, y0 - 1.0, 1.0, dim + 2.0);
+        self.swatch(ColorRow::Border3, x0 + dim + 2.0, y0 - 1.0, 1.0, dim + 2.0);
+        self.swatch(ColorRow::Border3, x0 - 1.0, y0 - 3.0, dim + 2.0, 1.0);
+        self.swatch(ColorRow::Border3, x0 - 1.0, y0 + dim + 2.0, dim + 2.0, 1.0);
+    }
+
+    fn chat(&self, game: &Game, sw: f32, sh: f32) {
+        let radar_size = sw * 0.165 + 11.0;
+        let max_chars = ((sw - radar_size) / FONT_W) as usize;
+        let shown = (sh / 100.0) as usize + 1;
+        let mut lines: Vec<(String, TextColor)> = Vec::new();
+        if let Some(s) = &game.session {
+            for c in s.chat.iter() {
+                let sender = s.players.get(&c.pid).map(|p| p.name.as_str()).unwrap_or("");
+                let (text, color) = match c.kind {
+                    0 => (c.text.clone(), TextColor::Green),              // arena
+                    2 | 1 => (format!("{sender:>10}> {}", c.text), TextColor::Blue), // public
+                    3 => (format!("{sender:>10}> {}", c.text), TextColor::Yellow),   // team
+                    5 | 7 => (format!("{sender:>10}> {}", c.text), TextColor::Green), // private
+                    6 | 8 => (c.text.clone(), TextColor::Red),
+                    _ => (c.text.clone(), TextColor::White),
+                };
+                lines.push((text, color));
+            }
+        }
+        lines.extend(game.notices.iter().map(|n| (n.clone(), TextColor::Green)));
+        let mut y = sh;
+        if let Some(input) = &self.chat_input {
+            y -= FONT_H;
+            let shown_input: String = input.chars().rev().take(max_chars.saturating_sub(1)).collect::<Vec<_>>().into_iter().rev().collect();
+            self.text(&format!("{shown_input}_"), TextColor::White, 0.0, y);
+        }
+        let start = lines.len().saturating_sub(shown);
+        for (text, color) in lines[start..].iter().rev() {
+            y -= FONT_H;
+            let clipped: String = text.chars().take(max_chars).collect();
+            self.text(&clipped, *color, 0.0, y);
+        }
+    }
+
+    /// "name(bounty)" at the lower right of a ship; team yellow, enemies blue.
+    pub fn name_label(&self, name: &str, bounty: u16, team: bool, ship_screen: (f32, f32)) {
+        let color = if team { TextColor::Yellow } else { TextColor::Blue };
+        self.text(&format!("{name}({bounty})"), color, ship_screen.0 + 18.0, ship_screen.1 + 18.0);
+    }
+}

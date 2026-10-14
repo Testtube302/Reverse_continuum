@@ -27,8 +27,13 @@
       NOT yet: usable items (repel/burst/decoy/thor/brick/rocket/portal/warp key), stealth/
       cloak/xradar/antiwarp effects, EMP shutdown, arena spawn settings, attach/turrets,
       flags/balls, score packets.
-- [ ] M4 UI: HUD (energy font, radar, chat, stat box), menus, special tiles (170+, asteroids,
-      station, wormhole, doors), stars background, LVZ. Screenshot-diff vs original under Wine.
+- [~] M4 UI (in progress): DONE hud.rs — tallfont text (8 colours), engyfont energy digits,
+      hlthbar + gradient energy bar, item/weapon icon columns, radar (MapZoomFactor, wall-priority
+      for <1024px maps, border, dots), chat log + Enter-to-type public chat, name(bounty) labels;
+      tile layering (fly-over 176-190 above ships, black keyed only >172), animated goal/asteroids/
+      station/wormhole, two-layer parallax stars (own RNG — original star layout not reproducible).
+      TODO: stat box/player list, menus (Esc/F1), door animation, flags, LVZ, and the screenshot
+      diff vs the original (needs GUI automation of Continuum under Wine — ask user first).
 
 ## Facts established
 - `.bm2` = 8-bit BMP, some RLE8. Black (0,0,0) = transparent. `.wa2` = 8-bit mono 22050 Hz WAV.
@@ -62,6 +67,12 @@
 - Live tests: `AICONTINUUM_SERVER=127.0.0.1:5000 cargo test -- --test-threads=1`
 - Reference assets: scratchpad extraction is temporary — re-extract the installer with innoextract
   if it's gone, and pass via --assets / AICONTINUUM_ASSETS.
+
+## Original Continuum under Wine
+- Installed copy: ~/.wine-aicontinuum/drive_c/Continuum (zone.dat has "AIC Local,127.0.0.1,5000"
+  first; Continuum.reg imported). Launch: cd there; WINEPREFIX=~/.wine-aicontinuum wine Continuum.exe
+- Shows the Continuum 0.40 menu window; entering a zone needs mouse clicks on the user's desktop.
+  `screencapture` works from this terminal (captures the WHOLE screen — crop/delete after use).
 
 ## Open items
 - Debug text overlay + macroquad text labels in main.rs are temporary until the real HUD (M4).
