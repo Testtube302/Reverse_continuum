@@ -37,7 +37,21 @@
       column count boxes from icondoor.png row 0 at (24, y+6) — now 1 px off the original.
       Rig: arenas/(default)/arena.conf [Warbird] has InitialRepel/Burst/Decoy/Thor=2 (backup
       /work/arena.conf.bak-r13 in aic-ref).
-      NOT yet: rocket, brick, portal, warp, stealth/
+      Round 14: rocket (F3), brick (F4), portal (Shift+Ins), warp (Ins). Offsets re-derived from
+      nullspace ArenaSettings.h incl. SpawnSettings[4] (all anchors match): RocketThrust 1212,
+      RocketSpeed 1216, BrickTime 1318, WarpPointDelay 1328, AntiwarpSettleDelay 1392; ship
+      RocketTime +88. Rocket: RocketTime ticks of forced forward thrust at RocketThrust up to
+      RocketSpeed, no afterburner, rocket.png exhaust (3 puffs; ours a little narrower than the
+      original's). Brick: C2S 0x1C (tile x,y) -> S2C 0x21 (x1,y1,x2,y2,team,id,timestamp) laid as
+      tile 250 for BrickTime; wall.png row 0 enemy, row 1 team (verified: zone-relayed brick shown
+      at the same place/time; colour now judged from the followed player for spectators).
+      Portal: marks the spot for WarpPointDelay (warppnt.png). Warp: to the portal if any, else
+      respawn needing full energy (leaves 1, "Not enough energy to warp." otherwise); both set the
+      flash bit (0x10) in our next position status byte; remote flashes (S2C 0x05 status @13,
+      0x28 @9) play the warp animation — seen working in our client when the original warped.
+      TODO: teammates pass through their own bricks; enemy brick on top of us -> respawn;
+      antiwarp blocks portal/warp; remote rocket exhaust (not in packets).
+      NOT yet: stealth/
       cloak/xradar/antiwarp effects, EMP shutdown, arena spawn settings, attach/turrets,
       flags/balls, score packets.
 - [x] M4 UI (look-matching done 2026-10-15, leftovers listed in round 12): hud.rs + main.rs draw the HUD, radar, chat, Esc menu, map objects,
@@ -182,8 +196,8 @@
 - Rig helpers: tools/ref-rig/rx.sh (run in container, optional screenshot → ~/aicontinuum-ref/shots;
   C=aic-wine5 to target the original's container) and crop.sh. Start: `docker start aic-ref aic-wine5`,
   clear /tmp/.X99-lock, start Xvfb :99 x16, zone-restart.sh, then join5.sh in aic-wine5.
-- Next: rocket, brick, portal, warp; then stealth/cloak/xradar/antiwarp, EMP shutdown,
-  attach/turrets, balls, scores.
+- Next: stealth/cloak/xradar/antiwarp, EMP shutdown, attach/turrets, balls, scores.
+- Rig arena gives Warbirds 2 of every item (InitialRepel..InitialPortal).
 - The rig's centre safe zone has wall pieces: bots chasing the original get stuck behind them.
   Move the original into open space first (Up 1.2 s, wait, Down 1.2 s).
 - After a help capture the original is left with an F1 page open: press F1 until it closes.

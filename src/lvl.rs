@@ -97,6 +97,13 @@ impl Map {
         }
     }
 
+    /// Changes one tile (bricks); out-of-map coordinates are ignored.
+    pub fn set_tile(&mut self, x: i32, y: i32, id: u8) {
+        if x >= 0 && y >= 0 && (x as usize) < MAP_SIZE && (y as usize) < MAP_SIZE {
+            self.tiles[y as usize * MAP_SIZE + x as usize] = id;
+        }
+    }
+
     pub fn tile(&self, x: i32, y: i32) -> u8 {
         if x < 0 || y < 0 || x as usize >= MAP_SIZE || y as usize >= MAP_SIZE {
             return OUT_OF_BOUNDS;

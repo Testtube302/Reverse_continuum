@@ -142,6 +142,8 @@ pub struct Exhaust {
     /// Tiles per tick.
     pub velocity: Vec2,
     pub age: u32,
+    /// Rocket exhaust (rocket.png) rather than engine exhaust.
+    pub rocket: bool,
 }
 
 impl Exhaust {
@@ -379,6 +381,9 @@ impl Game {
             }
         }
         let Some(s) = self.session.as_mut() else { return };
+        for at in s.warp_flashes.drain(..) {
+            self.effects.push(Effect { kind: EffectKind::Warp, position: at, age: 0 });
+        }
         for m in s.arena_messages.drain(..) {
             self.center_messages.push(CenterMessage { text: m, yellow: false, age: 0 });
         }
@@ -480,7 +485,25 @@ impl Game {
                 self.sounds.push(SoundCue { name: "bounce".into(), position: ship.position });
             }
             let in_safe = map.tile(ship.position.x as i32, ship.position.y as i32) == TILE_SAFE;
-            if input.forward || input.backward {
+            if ship.rocket_ticks > 0 {
+                // Rocket exhaust: three puffs from rocket.png behind the ship (reference client).
+                if self.thrust_ticks % EXHAUST_INTERVAL_TICKS == 0 {
+                    let a = ship.orientation * std::f32::consts::TAU;
+                    let (fx, fy) = (a.sin(), -a.cos());
+                    for side in [-0.3f32, 0.0, 0.3] {
+                        let back = if side == 0.0 { 0.3 } else { 0.2 } * 0.6;
+                        let position = Vec2::new(
+                            ship.position.x - fx * back - fy * side,
+                            ship.position.y - fy * back + fx * side,
+                        );
+                        let (vx, vy) = (-fx - fy * side, -fy + fx * side);
+                        let len = (vx * vx + vy * vy).sqrt().max(0.001);
+                        let velocity = Vec2::new(vx / len * 0.6 / 100.0, vy / len * 0.6 / 100.0);
+                        self.exhaust.push(Exhaust { position, velocity, age: 0, rocket: true });
+                    }
+                }
+                self.thrust_ticks += 1;
+            } else if input.forward || input.backward {
                 if self.thrust_ticks % EXHAUST_INTERVAL_TICKS == 0 {
                     let a = ship.orientation * std::f32::consts::TAU;
                     let (fx, fy) = (a.sin(), -a.cos());
@@ -490,7 +513,7 @@ impl Game {
                         let position = Vec2::new(ship.position.x + x / 16.0, ship.position.y + y / 16.0);
                         let speed = EXHAUST_SPEED_PX / 16.0 / 100.0;
                         let velocity = Vec2::new(-fx * speed, -fy * speed);
-                        self.exhaust.push(Exhaust { position, velocity, age: 0 });
+                        self.exhaust.push(Exhaust { position, velocity, age: 0, rocket: false });
                     }
                 }
                 self.thrust_ticks += 1;
@@ -499,6 +522,11 @@ impl Game {
             }
             // The safety clock restarts from SafetyLimit on every entry (measured).
             self.safe_ticks = if in_safe { self.safe_ticks + 1 } else { 0 };
+            let old_pos = ship.position;
+            let used = ship.use_utilities(input, &settings, in_safe);
+            let (pos, kind) = (ship.position, ship.ship);
+            self.apply_utilities(used, old_pos, pos, kind, &map, &settings);
+            let ship = self.ship.as_mut().unwrap();
             if let Some(f) = ship.try_fire(input, &settings, in_safe) {
                 let shooter = Shooter {
                     pid: local_pid,
@@ -660,6 +688,48 @@ impl Game {
                 frame0,
                 spin,
             });
+        }
+    }
+
+    /// Effects of rocket, brick, portal and warp use: sounds, the brick request, warps.
+    fn apply_utilities(&mut self, used: sim::Utility, old: Vec2, now: Vec2, ship: u8, map: &Map, settings: &ArenaSettings) {
+        if used.brick {
+            if let Some(s) = self.session.as_mut() {
+                s.send_drop_brick(now.x as u16, now.y as u16);
+            }
+        }
+        if used.rocket {
+            self.sounds.push(SoundCue { name: "rocket1".into(), position: now });
+        }
+        if used.portal {
+            self.sounds.push(SoundCue { name: "warppnt".into(), position: now });
+        }
+        let warped = match used.warp {
+            Some(sim::WarpKind::NotEnoughEnergy) => {
+                let text = "Not enough energy to warp.".to_string();
+                self.center_messages.push(CenterMessage { text, yellow: true, age: 0 });
+                false
+            }
+            Some(sim::WarpKind::ToPortal) => true,
+            Some(sim::WarpKind::Respawn) => {
+                // A warp lands on a fresh spawn point; the old spot gets the warp animation too.
+                let seed = self.random(u32::MAX);
+                let to = spawn_ship(map, settings, ship, seed).position;
+                if let Some(s) = self.ship.as_mut() {
+                    s.position = to;
+                }
+                self.effects.push(Effect { kind: EffectKind::Warp, position: old, age: 0 });
+                true
+            }
+            None => false,
+        };
+        if warped {
+            let at = self.ship.as_ref().map_or(now, |s| s.position);
+            self.effects.push(Effect { kind: EffectKind::Warp, position: at, age: 0 });
+            self.sounds.push(SoundCue { name: "warp".into(), position: at });
+            if let Some(s) = self.session.as_mut() {
+                s.pending_status |= 0x10;
+            }
         }
     }
 

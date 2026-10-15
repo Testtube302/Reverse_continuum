@@ -34,6 +34,8 @@ struct Args {
     script_thrust_ticks: u32,
     /// Scripted input for screenshot runs: hold the gun and bomb keys.
     script_fire: bool,
+    /// Scripted input: fire a rocket on the first scripted tick (one is granted).
+    script_rocket: bool,
     mute: bool,
     /// Offline: start the ship at this tile position.
     at: Option<Vec2>,
@@ -59,6 +61,7 @@ fn parse_args() -> Args {
         screenshot: None,
         script_thrust_ticks: 0,
         script_fire: false,
+        script_rocket: false,
         mute: false,
         at: None,
         menu: false,
@@ -90,6 +93,7 @@ fn parse_args() -> Args {
             }
             "--thrust-ticks" => args.script_thrust_ticks = value().parse().unwrap_or(0),
             "--script-fire" => args.script_fire = true,
+            "--script-rocket" => args.script_rocket = true,
             "--mute" => args.mute = true,
             "--fullscreen" => {}
             "--menu" => args.menu = true,
@@ -178,6 +182,9 @@ struct Graphics {
     warp: Sheet,
     repel: Sheet,
     exhaust: Sheet,
+    rocket: Sheet,
+    portal: Sheet,
+    bricks: Sheet,
     trail: Sheet,
     /// Ship debris, one sheet per ship type: 9 pieces (rows) x 10 rotations.
     junk: Vec<Sheet>,
@@ -206,6 +213,9 @@ impl Graphics {
             warp: Sheet::load(assets, "warp", 48, 48),
             repel: Sheet::load(assets, "repel", 96, 96),
             exhaust: Sheet::load(assets, "exhaust", 16, 16),
+            rocket: Sheet::load(assets, "rocket", 24, 24),
+            portal: Sheet::load(assets, "warppnt", 16, 16),
+            bricks: Sheet::load(assets, "wall", 16, 16),
             trail: Sheet::load(assets, "trail", 16, 16),
             junk: ["wb", "jv", "sp", "lv", "te", "we", "nw", "sh"]
                 .iter()
@@ -340,7 +350,9 @@ fn read_input() -> Input {
     let shift = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
     let tab = is_key_down(KeyCode::Tab);
     let ctrl = is_key_down(KeyCode::LeftControl) || is_key_down(KeyCode::RightControl);
-    // Continuum's default keys: Shift+Ctrl repel, Shift+Del burst, F5 decoy, F6 thor.
+    // Continuum's default keys: Shift+Ctrl repel, Shift+Del burst, F5 decoy, F6 thor,
+    // F3 rocket, F4 brick, Insert warp, Shift+Insert portal.
+    let insert = is_key_down(KeyCode::Insert);
     Input {
         left: is_key_down(KeyCode::Left),
         right: is_key_down(KeyCode::Right),
@@ -354,6 +366,10 @@ fn read_input() -> Input {
         burst: shift && is_key_down(KeyCode::Delete),
         decoy: is_key_down(KeyCode::F5),
         thor: is_key_down(KeyCode::F6),
+        rocket: is_key_down(KeyCode::F3),
+        brick: is_key_down(KeyCode::F4),
+        portal: insert && shift,
+        warp: insert && !shift,
     }
 }
 
@@ -509,9 +525,15 @@ async fn main() {
         if ready {
             if args.screenshot.is_some() && game.session.is_none() {
                 // Deterministic offline script: a fixed number of ticks regardless of frame time.
+                if args.script_rocket && scripted_ticks == 0 {
+                    if let Some(ship) = game.ship.as_mut() {
+                        ship.items[5] = ship.items[5].max(1);
+                    }
+                }
                 while scripted_ticks < args.script_thrust_ticks {
                     let input = Input {
-                        forward: true,
+                        rocket: args.script_rocket && scripted_ticks == 0,
+                        forward: !args.script_rocket,
                         gun: args.script_fire && scripted_ticks > args.script_thrust_ticks.saturating_sub(40),
                         bomb: args.script_fire && scripted_ticks == args.script_thrust_ticks.saturating_sub(60),
                         ..Default::default()
@@ -627,6 +649,16 @@ fn draw_weapon(gfx: &Graphics, w: &Weapon, x: f32, y: f32) {
     }
 }
 
+/// The team things are judged from: ours, or a spectator sees through the followed player.
+fn view_freq(game: &Game) -> Option<u16> {
+    let s = game.session.as_ref()?;
+    let followed = game.follow.as_ref().and_then(|n| s.players.values().find(|p| &p.name == n));
+    match (game.ship.is_none(), followed) {
+        (true, Some(f)) => Some(f.freq),
+        _ => s.me().map(|m| m.freq),
+    }
+}
+
 fn draw_world(game: &Game, tiles: &Tiles, gfx: &Graphics, hud: &mut hud::Hud) {
     let (map, _settings) = game.world().unwrap();
     clear_background(BLACK);
@@ -682,7 +714,7 @@ fn draw_world(game: &Game, tiles: &Tiles, gfx: &Graphics, hud: &mut hud::Hud) {
 
     // Dropped flags: first row of flag.png for enemy/neutral, second for our team's.
     if let Some(s) = &game.session {
-        let my_freq = s.me().map(|m| m.freq);
+        let my_freq = view_freq(game);
         let per_row = gfx.flags.frame_count() / 2;
         let frame = ((get_time() * per_row as f64) as u32) % per_row.max(1);
         for f in s.flags.values().filter(|f| f.dropped) {
@@ -695,7 +727,12 @@ fn draw_world(game: &Game, tiles: &Tiles, gfx: &Graphics, hud: &mut hud::Hud) {
     // Exhaust sits under the ships (its first frames are hidden by the ship in the original).
     for e in &game.exhaust {
         let (x, y) = to_screen(e.position);
-        gfx.exhaust.draw_centered(e.frame(), x, y);
+        if e.rocket {
+            // rocket.png: 13 frames of 24 px over 0.3 s (reference client).
+            gfx.rocket.draw_centered((e.age * 13 / 30).min(12), x, y);
+        } else {
+            gfx.exhaust.draw_centered(e.frame(), x, y);
+        }
     }
 
     for p in &game.bomb_puffs {
@@ -709,18 +746,28 @@ fn draw_world(game: &Game, tiles: &Tiles, gfx: &Graphics, hud: &mut hud::Hud) {
         draw_rectangle(x, y, 1.0, 1.0, Color::from_rgba(r, g, b, 255));
     }
 
+    // Bricks: wall.png, enemy row then team row, 10 frames a second.
+    if let Some(s) = &game.session {
+        let my_freq = view_freq(game);
+        let frame = ((get_time() * 10.0) as u32) % 10;
+        for &(bx, by, team, _) in &s.bricks {
+            let row = if Some(team) == my_freq { 10 } else { 0 };
+            gfx.bricks.draw(row + frame, bx as f32 * tile - cam_x, by as f32 * tile - cam_y);
+        }
+    }
+    // Our portal, while it lasts: warppnt.png cycling once a second.
+    if let Some((at, _)) = game.ship.as_ref().and_then(|s| s.portal) {
+        let (x, y) = to_screen(at);
+        gfx.portal.draw_centered(((get_time() * 10.0) as u32) % 10, x, y);
+    }
+
     for w in &game.weapons.list {
         let (x, y) = to_screen(w.position);
         draw_weapon(gfx, w, x, y);
     }
 
     if let Some(s) = &game.session {
-        // Teams are judged from the viewer's side; a spectator sees through the followed player.
-        let followed = game.follow.as_ref().and_then(|n| s.players.values().find(|p| &p.name == n));
-        let view_freq = match (game.ship.is_none(), followed) {
-            (true, Some(f)) => Some(f.freq),
-            _ => s.me().map(|m| m.freq),
-        };
+        let view_freq = view_freq(game);
         let now = aicontinuum::net::transport::now_tick();
         for p in s.players.values() {
             if Some(p.pid) == s.pid || p.ship >= 8 || p.dead || p.position_updates == 0 {

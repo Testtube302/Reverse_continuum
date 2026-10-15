@@ -180,6 +180,12 @@ pub struct Session {
     pub door_generation: u32,
     /// "X entered arena" / "X left arena" lines for players arriving after we joined.
     pub arena_messages: Vec<String>,
+    /// Status bits to send with our next position (0x10 = warp flash), then cleared.
+    pub pending_status: u8,
+    /// Players seen warping (their position packet had the flash bit), to animate.
+    pub warp_flashes: Vec<Vec2>,
+    /// Bricks standing on the map: (tile x, tile y, team, local tick they expire).
+    pub bricks: Vec<(u16, u16, u16, u32)>,
     /// Human-readable protocol log for diagnostics.
     pub log: Vec<String>,
     pub joined: bool,
@@ -212,6 +218,9 @@ impl Session {
             doors: None,
             door_generation: 0,
             arena_messages: Vec::new(),
+            pending_status: 0,
+            warp_flashes: Vec::new(),
+            bricks: Vec::new(),
             log: Vec::new(),
             joined: false,
             spectate_at: Vec2::new(512.0, 512.0),
@@ -255,6 +264,53 @@ impl Session {
             }
         }
         self.update_doors();
+        self.expire_bricks();
+    }
+
+    /// Asks the zone to drop a brick at our tile.
+    pub fn send_drop_brick(&mut self, x: u16, y: u16) {
+        let mut p = vec![0x1C];
+        p.extend_from_slice(&x.to_le_bytes());
+        p.extend_from_slice(&y.to_le_bytes());
+        self.transport.send_reliable(&p);
+    }
+
+    /// S2C 0x21: a brick wall from (x1,y1) to (x2,y2) for a team, standing BrickTime ticks.
+    fn on_brick(&mut self, p: &[u8]) {
+        let (Some(x1), Some(y1), Some(x2), Some(y2), Some(team)) =
+            (u16_at(p, 1), u16_at(p, 3), u16_at(p, 5), u16_at(p, 7), u16_at(p, 9))
+        else {
+            return;
+        };
+        let life = self.settings.as_ref().map_or(500, |s| s.brick_time);
+        let until = now_tick().wrapping_add(life);
+        let (dx, dy) = (x2 as f32 - x1 as f32, y2 as f32 - y1 as f32);
+        let dist = (dx * dx + dy * dy).sqrt();
+        let (sx, sy) = if dist > 0.0 { (dx / dist, dy / dist) } else { (0.0, 0.0) };
+        let (mut x, mut y) = (x1 as f32, y1 as f32);
+        let mut i = 0.0;
+        while i <= dist {
+            let (tx, ty) = (x as u16, y as u16);
+            self.bricks.push((tx, ty, team, until));
+            if let Some(map) = self.map.as_mut() {
+                Arc::make_mut(map).set_tile(tx as i32, ty as i32, crate::lvl::TILE_BRICK);
+            }
+            x += sx;
+            y += sy;
+            i += 1.0;
+        }
+    }
+
+    fn expire_bricks(&mut self) {
+        let now = now_tick();
+        let (gone, keep): (Vec<_>, Vec<_>) =
+            self.bricks.drain(..).partition(|b| now.wrapping_sub(b.3) as i32 >= 0);
+        self.bricks = keep;
+        if let Some(map) = self.map.as_mut() {
+            for (x, y, _, _) in gone {
+                Arc::make_mut(map).set_tile(x as i32, y as i32, 0);
+            }
+        }
     }
 
     /// Steps the shared door RNG for every `DoorDelay` that has passed and applies the result.
@@ -451,7 +507,7 @@ impl Session {
         p.extend_from_slice(&vx.to_le_bytes());
         p.extend_from_slice(&y.to_le_bytes());
         p.push(0); // checksum, filled below
-        p.push(0); // status flags
+        p.push(std::mem::take(&mut self.pending_status)); // status flags (0x10 = warp flash)
         p.extend_from_slice(&x.to_le_bytes());
         p.extend_from_slice(&vy.to_le_bytes());
         p.extend_from_slice(&bounty.to_le_bytes());
@@ -520,6 +576,7 @@ impl Session {
                     }
                 }
             }
+            0x21 => self.on_brick(p),
             0x05 => self.on_large_position(p),
             0x28 => self.on_small_position(p),
             0x06 => {
@@ -746,6 +803,9 @@ impl Session {
         pl.dead = false;
         pl.direction = p[1];
         pl.position = Vec2::new(u16_at(p, 4).unwrap() as f32 / 16.0, u16_at(p, 15).unwrap() as f32 / 16.0);
+        if p.get(13).is_some_and(|st| st & 0x10 != 0) {
+            self.warp_flashes.push(pl.position);
+        }
         pl.velocity = Vec2::new(i16_at(p, 10).unwrap() as f32 / 160.0, i16_at(p, 6).unwrap() as f32 / 160.0);
         pl.bounty = u16_at(p, 17).unwrap();
         pl.ping = p[14];
@@ -770,6 +830,9 @@ impl Session {
         pl.bounty = p[7] as u16;
         pl.ping = p[6];
         pl.position = Vec2::new(u16_at(p, 4).unwrap() as f32 / 16.0, u16_at(p, 12).unwrap() as f32 / 16.0);
+        if p.get(9).is_some_and(|st| st & 0x10 != 0) {
+            self.warp_flashes.push(pl.position);
+        }
         pl.velocity = Vec2::new(i16_at(p, 14).unwrap() as f32 / 160.0, i16_at(p, 10).unwrap() as f32 / 160.0);
         pl.position_updates += 1;
         if p.len() >= 18 {

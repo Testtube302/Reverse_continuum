@@ -70,6 +70,28 @@ pub struct Input {
     pub burst: bool,
     pub decoy: bool,
     pub thor: bool,
+    pub rocket: bool,
+    pub brick: bool,
+    pub portal: bool,
+    pub warp: bool,
+}
+
+/// What [`Ship::use_utilities`] did this tick.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Utility {
+    pub brick: bool,
+    pub rocket: bool,
+    pub portal: bool,
+    pub warp: Option<WarpKind>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WarpKind {
+    /// Jumped back to our portal.
+    ToPortal,
+    /// Random respawn (needs full energy, leaves 1).
+    Respawn,
+    NotEnoughEnergy,
 }
 
 #[derive(Clone, Debug)]
@@ -102,6 +124,13 @@ pub struct Ship {
     /// Ticks left during which a repel lets us go faster than our top speed (up to RepelSpeed).
     pub repel_ticks: u32,
     next_repel_tick: u32,
+    /// Ticks of rocket left: thrust forward at RocketThrust up to RocketSpeed, no afterburner.
+    pub rocket_ticks: u32,
+    /// An active portal: where it is and ticks left.
+    pub portal: Option<(Vec2, u32)>,
+    /// Edge detection for the portal and warp keys (they act once per press).
+    portal_held: bool,
+    warp_held: bool,
     tick: u32,
     last_bounce_tick: Option<u32>,
     next_bullet_tick: u32,
@@ -164,6 +193,10 @@ impl Ship {
             next_bomb_tick: 0,
             repel_ticks: 0,
             next_repel_tick: 0,
+            rocket_ticks: 0,
+            portal: None,
+            portal_held: false,
+            warp_held: false,
         }
     }
 
@@ -253,6 +286,53 @@ impl Ship {
         Some(fire)
     }
 
+    /// Rocket, brick, portal and warp: the items that aren't weapons. Returns what happened;
+    /// the caller sends the brick and does the respawn for a plain warp.
+    pub fn use_utilities(&mut self, input: Input, settings: &ArenaSettings, in_safe: bool) -> Utility {
+        const WARP_DELAY_TICKS: u32 = 50;
+        let s = *self.stats(settings);
+        let now = self.tick;
+        let ready = |next: u32| now.wrapping_sub(next) as i32 >= 0;
+        let mut out = Utility::default();
+        if input.brick && ready(self.next_bomb_tick) && self.items[4] > 0 && !in_safe {
+            self.items[4] -= 1;
+            self.next_bomb_tick = self.next_bomb_tick.max(now + s.bomb_fire_delay);
+            self.next_bullet_tick = self.next_bullet_tick.max(now + s.bomb_fire_delay);
+            out.brick = true;
+        }
+        if input.rocket && ready(self.next_bomb_tick) && self.rocket_ticks == 0 && self.items[5] > 0 {
+            self.items[5] -= 1;
+            self.rocket_ticks = s.rocket_time;
+            out.rocket = true;
+        }
+        let portal_pressed = input.portal && !self.portal_held;
+        self.portal_held = input.portal;
+        if portal_pressed && self.items[6] > 0 {
+            self.items[6] -= 1;
+            self.portal = Some((self.position, settings.warp_point_delay.max(1)));
+            out.portal = true;
+        }
+        let warp_pressed = input.warp && !self.warp_held && !input.portal;
+        self.warp_held = input.warp;
+        if warp_pressed {
+            if let Some((at, _)) = self.portal.take() {
+                self.position = at;
+                self.next_bomb_tick = now + WARP_DELAY_TICKS;
+                out.warp = Some(WarpKind::ToPortal);
+            } else if ready(self.next_bomb_tick) {
+                self.next_bomb_tick = now + WARP_DELAY_TICKS;
+                if self.energy < self.max_energy as f32 {
+                    out.warp = Some(WarpKind::NotEnoughEnergy);
+                } else {
+                    self.energy = 1.0;
+                    self.velocity = Vec2::default();
+                    out.warp = Some(WarpKind::Respawn);
+                }
+            }
+        }
+        out
+    }
+
     /// Pays for a weapon that was actually spawned.
     pub fn commit_fire(&mut self, fire: Fire) {
         self.energy -= fire.cost;
@@ -291,22 +371,43 @@ impl Ship {
             }
         }
 
+        let rocket = self.rocket_ticks > 0;
+        self.rocket_ticks = self.rocket_ticks.saturating_sub(1);
         let thrusting = input.forward || input.backward;
         // Energy rates are per 10 seconds.
         let ab_cost = s.afterburner_energy as f32 / 10.0 * dt;
-        let afterburner = input.afterburner && thrusting && self.energy > ab_cost;
-        let thrust = if shutdown { 0 } else if afterburner { s.maximum_thrust } else { self.thrust } as f32 * (10.0 / 16.0) * dt;
+        let afterburner = input.afterburner && thrusting && self.energy > ab_cost && !rocket;
+        let thrust = if rocket {
+            settings.rocket_thrust
+        } else if shutdown {
+            0
+        } else if afterburner {
+            s.maximum_thrust
+        } else {
+            self.thrust
+        } as f32
+            * (10.0 / 16.0)
+            * dt;
         let h = heading(self.direction());
-        if input.forward {
+        if rocket {
+            self.velocity.x += h.x * thrust;
+            self.velocity.y += h.y * thrust;
+        } else if input.forward {
             self.velocity.x += h.x * thrust;
             self.velocity.y += h.y * thrust;
         } else if input.backward {
             self.velocity.x -= h.x * thrust;
             self.velocity.y -= h.y * thrust;
         }
-        self.thrusting = thrusting;
+        self.thrusting = thrusting || rocket;
+        if let Some((_, ticks)) = self.portal.as_mut() {
+            *ticks = ticks.saturating_sub(1);
+            if *ticks == 0 {
+                self.portal = None;
+            }
+        }
 
-        let mut speed = if afterburner { s.maximum_speed } else { self.speed };
+        let mut speed = if rocket { settings.rocket_speed } else if afterburner { s.maximum_speed } else { self.speed };
         if self.repel_ticks > 0 {
             self.repel_ticks -= 1;
             speed = speed.max(settings.repel_speed);
@@ -516,6 +617,51 @@ mod tests {
         let mut s2 = s.clone();
         s2.tick = 1000;
         assert!(s2.try_fire(Input { bomb: true, ..Default::default() }, &settings, false).is_none());
+    }
+
+    #[test]
+    fn rocket_pushes_forward_past_top_speed() {
+        let settings = ArenaSettings::default();
+        let map = crate::lvl::Map::empty();
+        let mut ship = Ship::new(0, Vec2::new(512.0, 512.0), &settings);
+        ship.items[5] = 1;
+        let used = ship.use_utilities(Input { rocket: true, ..Default::default() }, &settings, false);
+        assert!(used.rocket && ship.rocket_ticks > 0 && ship.items[5] == 0);
+        for _ in 0..150 {
+            ship.tick(&map, &settings, Input::default());
+        }
+        let top = ship.speed as f32 / 160.0;
+        assert!(ship.velocity.y < -top, "rocket speed {} beyond top speed {top}", -ship.velocity.y);
+    }
+
+    #[test]
+    fn portal_then_warp_returns_and_plain_warp_needs_full_energy() {
+        let settings = ArenaSettings::default();
+        let mut ship = Ship::new(0, Vec2::new(512.0, 512.0), &settings);
+        ship.items[6] = 1;
+        let portal = Input { portal: true, ..Default::default() };
+        assert!(ship.use_utilities(portal, &settings, false).portal);
+        ship.use_utilities(Input::default(), &settings, false);
+        ship.position = Vec2::new(600.0, 600.0);
+        let warp = Input { warp: true, ..Default::default() };
+        assert_eq!(ship.use_utilities(warp, &settings, false).warp, Some(WarpKind::ToPortal));
+        assert_eq!((ship.position.x, ship.position.y), (512.0, 512.0));
+        assert!(ship.portal.is_none());
+        // Holding the key doesn't warp again; a plain warp needs full energy and leaves 1.
+        assert_eq!(ship.use_utilities(warp, &settings, false).warp, None);
+        ship.use_utilities(Input::default(), &settings, false);
+        for _ in 0..60 {
+            ship.tick(&crate::lvl::Map::empty(), &settings, Input::default());
+        }
+        ship.energy = 10.0;
+        assert_eq!(ship.use_utilities(warp, &settings, false).warp, Some(WarpKind::NotEnoughEnergy));
+        ship.use_utilities(Input::default(), &settings, false);
+        for _ in 0..60 {
+            ship.tick(&crate::lvl::Map::empty(), &settings, Input::default());
+        }
+        ship.energy = ship.max_energy as f32;
+        assert_eq!(ship.use_utilities(warp, &settings, false).warp, Some(WarpKind::Respawn));
+        assert_eq!(ship.energy, 1.0);
     }
 
     #[test]
