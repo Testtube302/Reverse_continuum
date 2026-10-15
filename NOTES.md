@@ -93,8 +93,12 @@
 - Wine: ~/Applications/Wine Staging.app (Gcenx 11.18; Homebrew wine-stable cask disabled 2026-09-01).
   `WINEPREFIX=~/.wine-aicontinuum "~/Applications/Wine Staging.app/Contents/Resources/wine/bin/wine" X.exe`
 - Live tests: `AICONTINUUM_SERVER=127.0.0.1:5000 cargo test -- --test-threads=1`
-- Reference assets: scratchpad extraction is temporary — re-extract the installer with innoextract
-  if it's gone, and pass via --assets / AICONTINUUM_ASSETS.
+- Reference assets (persistent, outside the repo): ~/aicontinuum-ref/continuum-app (extracted
+  installer; pass via --assets / AICONTINUUM_ASSETS) and ~/aicontinuum-ref/cont-app.tgz (for the rig).
+- Rig helpers: tools/ref-rig/rx.sh (run in container, optional screenshot → ~/aicontinuum-ref/shots;
+  C=aic-wine5 to target the original's container) and crop.sh. Start: `docker start aic-ref aic-wine5`,
+  clear /tmp/.X99-lock, start Xvfb :99 x16, zone-restart.sh, then join5.sh in aic-wine5.
+- Next round planned: weapons/explosions comparison OUTSIDE the safe zone (bot chase:Name).
 
 ## Original Continuum under Wine
 - Installed copy: ~/.wine-aicontinuum/drive_c/Continuum (zone.dat has "AIC Local,127.0.0.1,5000"
