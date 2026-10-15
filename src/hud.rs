@@ -434,7 +434,33 @@ fn clock_text() -> String {
     format!("{h12}:{m:02}{}", if h < 12 { "am" } else { "pm" })
 }
 
-/// Local timezone offset, from the TZ-aware `date` output on Unix; UTC elsewhere.
+/// Local timezone offset in seconds east of UTC.
+#[cfg(windows)]
+fn local_utc_offset_secs() -> i64 {
+    #[repr(C)]
+    struct TimeZoneInformation {
+        bias: i32,
+        standard_name: [u16; 32],
+        standard_date: [u16; 8],
+        standard_bias: i32,
+        daylight_name: [u16; 32],
+        daylight_date: [u16; 8],
+        daylight_bias: i32,
+    }
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetTimeZoneInformation(info: *mut TimeZoneInformation) -> u32;
+    }
+    // SAFETY: the struct matches TIME_ZONE_INFORMATION and is only written by the call.
+    let mut info: TimeZoneInformation = unsafe { std::mem::zeroed() };
+    let mode = unsafe { GetTimeZoneInformation(&mut info) };
+    // Bias is minutes to add to local time to get UTC; mode 2 = daylight saving in effect.
+    let bias = info.bias + if mode == 2 { info.daylight_bias } else { info.standard_bias };
+    -(bias as i64) * 60
+}
+
+/// Local timezone offset in seconds east of UTC, from `date +%z`.
+#[cfg(not(windows))]
 fn local_utc_offset_secs() -> i64 {
     static OFFSET: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
     *OFFSET.get_or_init(|| {

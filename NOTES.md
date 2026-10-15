@@ -41,7 +41,12 @@
       prizes from LOCAL randomness (original gives different loadouts on respawn within one seed
       window — nullspace's shared-seed version is wrong). Prize seed must be applied before spawn.
       F2 stat box (names view) added: box 108 wide at (3,3), count centred at x=49, rows y=18+12i.
-      TODO: help (F1), name-tag toggles, LED rows 1-2 meaning (currently 0),
+      Round 3: flags (S2C 0x12 position, 0x13 claim, 0x16 drop; C2S 0x13 request; flag.png row 0
+      enemy/neutral, row 1 team; CarryFlags @1384) — the "glowing orbs" in the original were flags.
+      Windows clock uses GetTimeZoneInformation. Original's F1 help = 20+ pages of Continuum's own
+      prose: DO NOT copy; write our own help text in the same box style (decided 2026-10-15).
+      F3/F4/F5/F6 showed no visible change in a quiet arena — test with other players/chat.
+      TODO: help (F1, own text), name-tag toggles, LED rows 1-2 meaning (currently 0),
       bg sparkle objects (bg01-14), door animation, flags, LVZ, in-ship full-screen diff with
       matched state (original's ship had multiprize upgrades), Windows clock offset (uses `date`).
 

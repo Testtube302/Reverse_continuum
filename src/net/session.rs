@@ -94,6 +94,8 @@ pub struct Player {
     /// Low 16 bits of the server timestamp of the last position update.
     last_timestamp: Option<u16>,
     pub position_updates: u32,
+    /// Flags this player carries.
+    pub flags_carried: u16,
     /// Killed and not yet seen again.
     pub dead: bool,
 }
@@ -114,6 +116,17 @@ pub struct Death {
     pub bounty: u16,
     /// Prize left where the victim died (0 = none).
     pub green: i8,
+}
+
+/// A flag on the map (or carried, when `dropped` is false).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Flag {
+    pub id: u16,
+    pub x: u16,
+    pub y: u16,
+    /// Owning team; 0xFFFF = neutral.
+    pub owner: u16,
+    pub dropped: bool,
 }
 
 /// Prize traffic from the server for the game to act on.
@@ -148,6 +161,7 @@ pub struct Session {
     pub remote_fires: Vec<RemoteFire>,
     pub deaths: Vec<Death>,
     pub prize_events: Vec<PrizeEvent>,
+    pub flags: BTreeMap<u16, Flag>,
     /// Human-readable protocol log for diagnostics.
     pub log: Vec<String>,
     pub joined: bool,
@@ -176,6 +190,7 @@ impl Session {
             remote_fires: Vec::new(),
             deaths: Vec::new(),
             prize_events: Vec::new(),
+            flags: BTreeMap::new(),
             log: Vec::new(),
             joined: false,
             spectate_at: Vec2::new(512.0, 512.0),
@@ -272,6 +287,13 @@ impl Session {
     /// Requests a ship (0-7) or spectator mode (8).
     pub fn request_ship(&mut self, ship: u8) {
         self.transport.send_reliable(&[0x18, ship]);
+    }
+
+    /// Asks to pick up a flag we're touching.
+    pub fn send_flag_request(&mut self, id: u16) {
+        let mut p = vec![0x13];
+        p.extend_from_slice(&id.to_le_bytes());
+        self.transport.send_reliable(&p);
     }
 
     /// Reports picking up the green at (x, y).
@@ -412,6 +434,7 @@ impl Session {
                         last_timestamp: None,
                         position_updates: 0,
                         dead: false,
+                        flags_carried: u16_at(rec, 61).unwrap_or(0),
                     };
                     self.note(format!("player entered: {} (pid {}, ship {})", pl.name, pl.pid, pl.ship));
                     self.players.insert(pl.pid, pl);
@@ -440,6 +463,34 @@ impl Session {
                 if p.len() >= 5 {
                     let c = Chat { kind: p[1], pid: u16_at(p, 3).unwrap_or(0), text: cstr(&p[5..]) };
                     self.chat.push(c);
+                }
+            }
+            0x12 => {
+                if let (Some(id), Some(x), Some(y), Some(owner)) = (u16_at(p, 1), u16_at(p, 3), u16_at(p, 5), u16_at(p, 7)) {
+                    self.flags.insert(id, Flag { id, x, y, owner, dropped: true });
+                }
+            }
+            0x13 => {
+                if let (Some(id), Some(pid)) = (u16_at(p, 1), u16_at(p, 3)) {
+                    let freq = self.players.get(&pid).map(|p| p.freq);
+                    let carry = self.settings.as_ref().map_or(0, |s| s.carry_flags);
+                    if let Some(f) = self.flags.get_mut(&id) {
+                        if carry > 0 {
+                            f.dropped = false;
+                            if let Some(pl) = self.players.get_mut(&pid) {
+                                pl.flags_carried += 1;
+                            }
+                        } else if let Some(freq) = freq {
+                            f.owner = freq;
+                        }
+                    }
+                }
+            }
+            0x16 => {
+                if let Some(pid) = u16_at(p, 1) {
+                    if let Some(pl) = self.players.get_mut(&pid) {
+                        pl.flags_carried = 0;
+                    }
                 }
             }
             0x08 => {

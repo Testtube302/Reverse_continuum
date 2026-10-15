@@ -112,6 +112,8 @@ pub struct ArenaSettings {
     pub engine_shutdown_time: u32,
     /// Radar scale: the whole map is drawn `screen width * 8 / map_zoom` pixels across.
     pub map_zoom_factor: u32,
+    /// 0 = flags can't be carried; 1 = unlimited; n = up to n-1.
+    pub carry_flags: u32,
     pub death_prize_time: u32,
     pub prize_factor: u32,
     pub prize_delay: u32,
@@ -245,6 +247,7 @@ impl ArenaSettings {
             death_prize_time: u16_at(p, 1260),
             engine_shutdown_time: u16_at(p, 1266),
             map_zoom_factor: u16_at(p, 1274),
+            carry_flags: u8_at(p, 1384),
             prize_factor: u16_at(p, 1292),
             prize_delay: u16_at(p, 1294),
             minimum_virtual: u16_at(p, 1296),
@@ -363,6 +366,7 @@ impl Default for ArenaSettings {
             death_prize_time: 1000,
             engine_shutdown_time: 300,
             map_zoom_factor: 8,
+            carry_flags: 1,
             prize_factor: 1500,
             prize_delay: 1000,
             minimum_virtual: 300,

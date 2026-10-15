@@ -56,6 +56,8 @@ pub struct Game {
     pub dead_ticks: u32,
     pub weapons: Weapons,
     pub greens: Greens,
+    flag_ticks: u32,
+    flag_requests: std::collections::HashMap<u16, u32>,
     pub effects: Vec<Effect>,
     pub sounds: Vec<SoundCue>,
     pub notices: Vec<String>,
@@ -90,6 +92,8 @@ impl Game {
             dead_ticks: 0,
             weapons: Weapons::default(),
             greens: Greens::default(),
+            flag_ticks: 0,
+            flag_requests: std::collections::HashMap::new(),
             effects: Vec::new(),
             sounds: Vec::new(),
             notices: Vec::new(),
@@ -303,6 +307,7 @@ impl Game {
         }
 
         self.tick_prizes(&map, &settings);
+        self.tick_flags(&settings);
 
         // Weapons.
         let targets = self.targets();
@@ -383,6 +388,39 @@ impl Game {
             }
         }
         self.ship = Some(ship);
+    }
+
+    /// Touching a dropped flag we don't own asks the server for it (at most every 3 s per flag).
+    fn tick_flags(&mut self, settings: &ArenaSettings) {
+        const REQUEST_DELAY: u32 = 300;
+        self.flag_ticks = self.flag_ticks.wrapping_add(1);
+        let (Some(ship), true) = (&self.ship, self.alive()) else { return };
+        let freq = self.local_freq();
+        let r = settings.ships[ship.ship as usize].radius_tiles() + 1.0 / 16.0;
+        let pos = ship.position;
+        let carried = self.session.as_ref().and_then(|s| s.me()).map_or(0, |m| m.flags_carried as u32);
+        let carry = settings.carry_flags;
+        if carry == 0 || (carry > 1 && carried >= carry - 1) {
+            return;
+        }
+        let Some(s) = self.session.as_mut() else { return };
+        let touching: Vec<u16> = s
+            .flags
+            .values()
+            .filter(|f| f.dropped && f.owner != freq)
+            .filter(|f| {
+                let (fx, fy) = (f.x as f32, f.y as f32);
+                pos.x + r >= fx && pos.x - r < fx + 1.0 && pos.y + r >= fy && pos.y - r < fy + 1.0
+            })
+            .map(|f| f.id)
+            .collect();
+        for id in touching {
+            let last = self.flag_requests.get(&id).copied();
+            if last.is_none_or(|t| self.flag_ticks.wrapping_sub(t) >= REQUEST_DELAY) {
+                s.send_flag_request(id);
+                self.flag_requests.insert(id, self.flag_ticks);
+            }
+        }
     }
 
     fn mine_allowed(&mut self, data: WeaponData, at: Vec2, settings: &ArenaSettings) -> bool {

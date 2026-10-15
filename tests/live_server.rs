@@ -73,6 +73,7 @@ fn logs_in_enters_arena_and_downloads_map() {
     assert_eq!((settings.multi_prize_count, settings.death_prize_time, settings.engine_shutdown_time), (10, 800, 700));
     assert!(!settings.take_prize_reliable);
     assert_eq!(settings.map_zoom_factor, 10);
+    assert_eq!(settings.carry_flags, 1);
     assert!(s.pid.is_some());
     assert!(s.me().is_some(), "we appear in our own player list");
     let map = s.map.as_ref().unwrap();

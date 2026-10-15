@@ -157,6 +157,7 @@ struct Graphics {
     explode2: Sheet,
     empburst: Sheet,
     prizes: Sheet,
+    flags: Sheet,
     goal: Sheet,
     over1: Sheet,
     over2: Sheet,
@@ -178,6 +179,7 @@ impl Graphics {
             explode2: Sheet::load(assets, "explode2", 80, 80),
             empburst: Sheet::load(assets, "empburst", 80, 80),
             prizes: Sheet::load(assets, "prizes", 16, 16),
+            flags: Sheet::load(assets, "flag", 16, 16),
             goal: Sheet::load(assets, "goal", 16, 16),
             over1: Sheet::load(assets, "over1", 16, 16),
             over2: Sheet::load(assets, "over2", 32, 32),
@@ -593,6 +595,18 @@ fn draw_world(game: &Game, tiles: &Tiles, gfx: &Graphics, hud: &mut hud::Hud) {
     for g in &game.greens.list {
         let (x, y) = to_screen(Vec2::new(g.x as f32, g.y as f32));
         gfx.prizes.draw(prize_frame, x, y);
+    }
+
+    // Dropped flags: first row of flag.png for enemy/neutral, second for our team's.
+    if let Some(s) = &game.session {
+        let my_freq = s.me().map(|m| m.freq);
+        let per_row = gfx.flags.frame_count() / 2;
+        let frame = ((get_time() * per_row as f64) as u32) % per_row.max(1);
+        for f in s.flags.values().filter(|f| f.dropped) {
+            let row = if Some(f.owner) == my_freq { per_row } else { 0 };
+            let (x, y) = to_screen(Vec2::new(f.x as f32, f.y as f32));
+            gfx.flags.draw(row + frame, x, y);
+        }
     }
 
     for w in &game.weapons.list {

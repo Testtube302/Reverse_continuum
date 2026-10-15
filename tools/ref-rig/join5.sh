@@ -1,6 +1,7 @@
 #!/bin/bash
 # Wine 5.5 rig: start display, init prefix once, launch Continuum windowed, join "AIC Local".
 if ! xdpyinfo >/dev/null 2>&1; then
+  rm -f /tmp/.X98-lock /tmp/.X11-unix/X98   # stale after a container restart
   setsid Xvfb :98 -screen 0 1024x768x16 -nolisten tcp >/tmp/xvfb.log 2>&1 < /dev/null &
   for i in $(seq 20); do xdpyinfo >/dev/null 2>&1 && break; sleep 0.5; done
 fi
