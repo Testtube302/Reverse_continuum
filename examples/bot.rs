@@ -4,6 +4,7 @@
 //!          chat = say something in public chat every 3 seconds,
 //!          chase:NAME = steer toward player NAME, keep ~10 tiles away and fire when lined up,
 //!          dist:N = chase distance in tiles (default 10),
+//!          every:MS = at most one shot per MS milliseconds, bomb = fire bombs instead of guns,
 //!          freq:N = switch to team N after getting a ship
 
 use std::time::{Duration, Instant};
@@ -44,6 +45,9 @@ fn main() {
     let freq: Option<u16> = modes.iter().find_map(|m| m.strip_prefix("freq:")).and_then(|f| f.parse().ok());
     let mut freq_sent = false;
     let dist: f32 = modes.iter().find_map(|m| m.strip_prefix("dist:")).and_then(|d| d.parse().ok()).unwrap_or(10.0);
+    let every: Option<u64> = modes.iter().find_map(|m| m.strip_prefix("every:")).and_then(|d| d.parse().ok());
+    let bomb = modes.contains(&"bomb");
+    let mut next_shot = Instant::now();
     let mut next_report = Instant::now() + Duration::from_secs(2);
     let mut next_chat = Instant::now() + Duration::from_secs(3);
     let mut said = 0u32;
@@ -74,9 +78,20 @@ fn main() {
             _ => input,
         };
         while Instant::now() >= next_tick {
+            let mut input = input;
+            if bomb {
+                (input.bomb, input.gun) = (input.gun, false);
+            }
+            if every.is_some() && Instant::now() < next_shot {
+                (input.gun, input.bomb) = (false, false);
+            }
             let fired = game.tick(input);
             if fired.0 != 0 {
                 game.send_updates(fired);
+                if let Some(ms) = every {
+                    next_shot = Instant::now() + Duration::from_millis(ms);
+                    println!("{name}: shot at {:?}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap());
+                }
             }
             next_tick += Duration::from_millis(10);
         }

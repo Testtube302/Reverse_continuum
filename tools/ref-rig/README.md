@@ -36,3 +36,6 @@ Animation timing: `ring.sh` (copy into a container, run with `setsid`, `touch /w
 keeps the last ~8 s of 400×400 centre captures named by nanosecond timestamp (~14 ms apart for the
 original). Convert to PNG, fetch, then `match_anim.py SHEET FW FH DIR [cx cy search]` prints the
 best-matching sprite frame per capture, from which per-frame durations come out by regression.
+`fetch-cap.sh CONTAINER NAME` converts a ring capture to PNG and unpacks it under
+`~/aicontinuum-ref/NAME/cp`. Don't `pkill -f AIContinuum.exe` inside an `rx.sh` command: it
+matches the shell running that command.

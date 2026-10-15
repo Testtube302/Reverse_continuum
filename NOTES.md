@@ -44,7 +44,8 @@
       Round 3: flags (S2C 0x12 position, 0x13 claim, 0x16 drop; C2S 0x13 request; flag.png row 0
       enemy/neutral, row 1 team; CarryFlags @1384) — the "glowing orbs" in the original were flags.
       Windows clock uses GetTimeZoneInformation. Original's F1 help = 20+ pages of Continuum's own
-      prose: DO NOT copy; write our own help text in the same box style (decided 2026-10-15).
+      prose. Originally written as our own text; Ryan later (2026-10-15) said matching the
+      original is fine — see round 8.
       F3/F4/F5/F6 showed no visible change in a quiet arena — test with other players/chat.
       Round 4: F1 help (own text, 3 pages), chat verified vs original with examples/bot fire,chat.
       Round 5: doors (DoorDelay @1306, DoorMode @1310 signed; door RNG from 0x18 [5..9] +
@@ -75,6 +76,22 @@
       a safe zone after spawning); a spectator not following anyone saw an enemy's label in
       yellow with energy; bullet-hit explode0 ~62-70 ms/frame in the original vs our 57 —
       re-measure with single shots before changing.
+      Round 8 (single shots: examples/bot every:MS, bomb; Leviathan has InitialBombs=1):
+      bullet hit explode0 = 7 frames x ~70 ms (49 ticks; ours was 40); bomb explode2 = 44 x
+      ~30 ms (132 ticks). Bullets/shrapnel leave 1-px trail dots every 2 ticks that fade through
+      6 shades held [5,1,4,1,1,1] ticks — red (L1) and blue (shrapnel L3) measured, yellow and
+      purple guessed; dot statistics match (orig 5.0 dots/frame). Safety timer: Misc:SafetyLimit
+      @1176, "Safety Time Left: h:mm:ss" Yellow at (sw/2, sh/2-48), only while our ship is on a
+      safe tile, restarts at the full limit on every entry (verified; glyphs identical).
+      Exhaust: pair of puffs every 8 ticks, 18 px behind centre, 9 px apart, 135 px/s backward
+      x0.975/tick, exhaust.png 19 frames at ~28 ms; drawn under ships (warbird measured; other
+      ships' engine layouts, the afterburner row and remote ships' exhaust not yet).
+      Hypothesis: the original animates on a ~28.6 ms (35 fps) clock — explode1 28.3, exhaust
+      ~28, explode2 29.9, warp 26.6 — check before tuning more timings.
+      Seen, not done: flag carriers' labels turn red as "name(bounty:flags)[ping]"; the original's
+      safe-zone tiles alternate between two tints frame to frame (check: may be capture tearing).
+      Online --at now also places our first ship (test aid). Commands.hlp in the install is
+      probably the F1 help text — Ryan OK'd matching the original help (2026-10-15).
       TODO: name-tag toggles, LED rows 1-2 meaning (currently 0),
       bg sparkle objects (bg01-14), door animation, flags, LVZ, in-ship full-screen diff with
       matched state (original's ship had multiprize upgrades), Windows clock offset (uses `date`).
@@ -114,8 +131,8 @@
 - Rig helpers: tools/ref-rig/rx.sh (run in container, optional screenshot → ~/aicontinuum-ref/shots;
   C=aic-wine5 to target the original's container) and crop.sh. Start: `docker start aic-ref aic-wine5`,
   clear /tmp/.X99-lock, start Xvfb :99 x16, zone-restart.sh, then join5.sh in aic-wine5.
-- Next round planned: bullet-hit/bomb explosion timing with single shots, safety timer, bomb
-  trails (trail.png) and exhaust (exhaust.png).
+- Next round planned: F1 help from Commands.hlp, flag-carrier labels, bomb trails (trail.png),
+  afterburner/remote exhaust, then whole-screen in-ship diff with matched state.
 
 ## Original Continuum under Wine
 - Installed copy: ~/.wine-aicontinuum/drive_c/Continuum (zone.dat has "AIC Local,127.0.0.1,5000"

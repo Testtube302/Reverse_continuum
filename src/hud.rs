@@ -146,6 +146,11 @@ impl Hud {
             // Spectators get only the X-radar indicator (slot 4 of the right column).
             self.icon(37, sw - 26.0, (sh / 2.0).floor() - 48.0 + 4.0 * 25.0);
         }
+        if let Some((h, m, sec)) = game.safety_time_left() {
+            // Starts at the screen centre, 48 px above it (measured).
+            let (x, y) = ((sw / 2.0).floor(), (sh / 2.0).floor() - 48.0);
+            self.text(&format!("Safety Time Left: {h}:{m:02}:{sec:02}"), TextColor::Yellow, x, y);
+        }
         self.radar(game, sw, sh);
         self.chat(game, sw, sh);
         // Centre message area: arena enter/leave lines (blue) and kills (yellow) at (sw/6, sh*0.6), newest at the bottom.

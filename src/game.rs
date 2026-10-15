@@ -21,8 +21,34 @@ pub const WARP_TICKS: u32 = 42;
 /// Ship debris: one piece per row of the ship's junk sheet, flying outward and tumbling.
 pub const DEBRIS_PIECES: u8 = 9;
 pub const DEBRIS_TICKS: u32 = 300;
-pub const BULLET_EXPLOSION_TICKS: u32 = 40;
-pub const BOMB_EXPLOSION_TICKS: u32 = 125;
+/// explode0's 7 frames at ~70 ms (measured from single shots: visible ~470-490 ms).
+pub const BULLET_EXPLOSION_TICKS: u32 = 49;
+/// explode2's 44 frames at ~30 ms (measured 29.9 ms/frame).
+pub const BOMB_EXPLOSION_TICKS: u32 = 132;
+/// Bullets and shrapnel drop a trail dot every 2 ticks; each dot fades through
+/// [`TRAIL_COLORS`], holding each shade for [`TRAIL_SHADE_TICKS`] (from the share of each
+/// shade among ~1000 trail dots in the original: 5.0 dots per frame).
+pub const TRAIL_INTERVAL_TICKS: u32 = 2;
+pub const TRAIL_SHADE_TICKS: [u32; 6] = [5, 1, 4, 1, 1, 1];
+/// Trail fades per bullet colour (red, yellow, blue, purple), newest first. Red and blue were
+/// measured from the original's 16-bit screen; yellow and purple are not measured yet.
+pub const TRAIL_COLORS: [[[u8; 3]; 6]; 4] = [
+    [[206, 8, 8], [165, 40, 0], [115, 24, 0], [99, 32, 0], [74, 44, 0], [57, 44, 8]],
+    [[231, 199, 41], [206, 150, 8], [165, 105, 8], [115, 81, 0], [82, 56, 0], [57, 44, 8]],
+    [[123, 121, 198], [99, 97, 165], [90, 89, 148], [66, 65, 90], [49, 56, 82], [33, 24, 49]],
+    [[173, 105, 222], [140, 81, 181], [115, 65, 148], [82, 48, 107], [57, 32, 74], [41, 24, 49]],
+];
+/// Engine exhaust while thrusting: a pair of puffs every 8 ticks, 18 px behind the ship's
+/// centre and 9 px apart, blown backward at ~135 px/s and slowing by 2.5% a tick, each playing
+/// exhaust.png's 19 frames at ~28 ms (measured from the original's warbird; other ships use the
+/// same engine layout for now).
+pub const EXHAUST_INTERVAL_TICKS: u32 = 8;
+pub const EXHAUST_TICKS: u32 = 53;
+const EXHAUST_SPEED_PX: f32 = 135.0;
+const EXHAUST_DRAG: f32 = 0.975;
+
+/// Ticks a trail dot lasts.
+pub const TRAIL_TICKS: u32 = 13;
 /// How long centre-screen messages stay up (measured from the original: ~4 s).
 pub const CENTER_MESSAGE_TICKS: u32 = 400;
 
@@ -74,6 +100,46 @@ impl Debris {
     }
 }
 
+/// A fading dot left behind a bullet or piece of shrapnel.
+#[derive(Clone, Copy, Debug)]
+pub struct TrailDot {
+    pub position: Vec2,
+    /// Row of [`TRAIL_COLORS`].
+    pub palette: u8,
+    pub age: u32,
+}
+
+impl TrailDot {
+    pub fn color(&self) -> [u8; 3] {
+        let shades = &TRAIL_COLORS[self.palette as usize % 4];
+        let mut age = self.age;
+        for (shade, ticks) in shades.iter().zip(TRAIL_SHADE_TICKS) {
+            if age < ticks {
+                return *shade;
+            }
+            age -= ticks;
+        }
+        shades[shades.len() - 1]
+    }
+}
+
+/// One puff of engine exhaust (row 0 of exhaust.png, row 1 with the afterburner on).
+#[derive(Clone, Copy, Debug)]
+pub struct Exhaust {
+    pub position: Vec2,
+    /// Tiles per tick.
+    pub velocity: Vec2,
+    pub afterburner: bool,
+    pub age: u32,
+}
+
+impl Exhaust {
+    /// Frame within a row of exhaust.png (19 frames at ~28 ms).
+    pub fn frame(&self) -> u32 {
+        (self.age * 10 / 28).min(18)
+    }
+}
+
 /// A centre-screen message: arena enter/leave lines and kill messages.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CenterMessage {
@@ -95,12 +161,17 @@ pub struct Game {
     pub ship: Option<Ship>,
     /// Ticks left before respawning after death.
     pub dead_ticks: u32,
+    /// Ticks our ship has spent in a safe zone since it last entered one (0 = outside).
+    pub safe_ticks: u32,
     pub weapons: Weapons,
     pub greens: Greens,
     flag_ticks: u32,
     flag_requests: std::collections::HashMap<u16, u32>,
     pub effects: Vec<Effect>,
     pub debris: Vec<Debris>,
+    pub trails: Vec<TrailDot>,
+    pub exhaust: Vec<Exhaust>,
+    thrust_ticks: u32,
     pub sounds: Vec<SoundCue>,
     pub notices: Vec<String>,
     /// Spectator camera when not in a ship.
@@ -139,12 +210,16 @@ impl Game {
             offline_world,
             ship: None,
             dead_ticks: 0,
+            safe_ticks: 0,
             weapons: Weapons::default(),
             greens: Greens::default(),
             flag_ticks: 0,
             flag_requests: std::collections::HashMap::new(),
             effects: Vec::new(),
             debris: Vec::new(),
+            trails: Vec::new(),
+            exhaust: Vec::new(),
+            thrust_ticks: 0,
             sounds: Vec::new(),
             notices: Vec::new(),
             // Spectators start at the map's top-left corner, as in the original.
@@ -191,6 +266,16 @@ impl Game {
 
     fn local_freq(&self) -> u16 {
         self.session.as_ref().and_then(|s| s.me()).map_or(0, |m| m.freq)
+    }
+
+    /// "Safety Time Left" while our ship sits in a safe zone: (hours, minutes, seconds).
+    pub fn safety_time_left(&self) -> Option<(u32, u32, u32)> {
+        let limit = self.world()?.1.safety_limit;
+        if limit == 0 || self.safe_ticks == 0 || !self.alive() {
+            return None;
+        }
+        let secs = limit.saturating_sub(self.safe_ticks) / 100;
+        Some((secs / 3600, secs / 60 % 60, secs % 60))
     }
 
     pub fn alive(&self) -> bool {
@@ -324,6 +409,7 @@ impl Game {
         // Our ship: respawn countdown, or movement and firing.
         if self.dead_ticks > 0 {
             self.dead_ticks -= 1;
+            self.safe_ticks = 0;
             if self.dead_ticks == 0 {
                 let seed = self.random(u32::MAX);
                 if let Some(kind) = self.ship.as_ref().map(|s| s.ship) {
@@ -337,6 +423,25 @@ impl Game {
                 self.sounds.push(SoundCue { name: "bounce".into(), position: ship.position });
             }
             let in_safe = map.tile(ship.position.x as i32, ship.position.y as i32) == TILE_SAFE;
+            if input.forward || input.backward {
+                if self.thrust_ticks % EXHAUST_INTERVAL_TICKS == 0 {
+                    let a = ship.orientation * std::f32::consts::TAU;
+                    let (fx, fy) = (a.sin(), -a.cos());
+                    for side in [-4.5f32, 4.5] {
+                        // 18 px behind the centre, 4.5 px to either side, in tiles.
+                        let (x, y) = (-fx * 18.0 - fy * side, -fy * 18.0 + fx * side);
+                        let position = Vec2::new(ship.position.x + x / 16.0, ship.position.y + y / 16.0);
+                        let speed = EXHAUST_SPEED_PX / 16.0 / 100.0;
+                        let velocity = Vec2::new(-fx * speed, -fy * speed);
+                        self.exhaust.push(Exhaust { position, velocity, afterburner: input.afterburner, age: 0 });
+                    }
+                }
+                self.thrust_ticks += 1;
+            } else {
+                self.thrust_ticks = 0;
+            }
+            // The safety clock restarts from SafetyLimit on every entry (measured).
+            self.safe_ticks = if in_safe { self.safe_ticks + 1 } else { 0 };
             if let Some(f) = ship.try_fire(input, &settings, in_safe) {
                 let shooter = Shooter {
                     pid: local_pid,
@@ -424,6 +529,26 @@ impl Game {
             e.age += 1;
         }
         self.effects.retain(|e| e.age < e.kind.duration());
+        for t in &mut self.trails {
+            t.age += 1;
+        }
+        for e in &mut self.exhaust {
+            e.age += 1;
+            e.position.x += e.velocity.x;
+            e.position.y += e.velocity.y;
+            e.velocity.x *= EXHAUST_DRAG;
+            e.velocity.y *= EXHAUST_DRAG;
+        }
+        self.exhaust.retain(|e| e.age < EXHAUST_TICKS);
+        self.trails.retain(|t| t.age < TRAIL_TICKS);
+        for w in &self.weapons.list {
+            if !matches!(w.data.kind(), WeaponKind::Bullet | WeaponKind::BouncingBullet) || w.age % TRAIL_INTERVAL_TICKS != 0 {
+                continue;
+            }
+            // Same colour as the sprite: bullet level, or shrapnel level (red, yellow, blue).
+            let palette = if w.data.shrap() > 0 { w.data.shrap_level() } else { w.data.level() } as u8;
+            self.trails.push(TrailDot { position: w.position, palette, age: 0 });
+        }
         for d in &mut self.debris {
             d.position.x += d.velocity.x;
             d.position.y += d.velocity.y;
@@ -734,6 +859,24 @@ mod tests {
         }
         assert!(g.weapons.list.is_empty());
         assert!(g.sounds.iter().any(|s| s.name == "explode0"));
+    }
+
+    #[test]
+    fn safety_clock_runs_in_safe_zone_and_restarts_on_entry() {
+        let d: Vec<u8> = (511..514u32).flat_map(|x| (x | (512 << 12) | (171 << 24)).to_le_bytes()).collect();
+        let mut g = Game::offline(Map::parse(&d).unwrap(), ArenaSettings::default(), 0);
+        g.ship.as_mut().unwrap().position = Vec2::new(512.5, 512.5);
+        assert_eq!(g.safety_time_left(), None);
+        for _ in 0..301 {
+            g.tick(Input::default());
+        }
+        assert_eq!(g.safety_time_left(), Some((0, 14, 56)));
+        g.ship.as_mut().unwrap().position = Vec2::new(520.5, 520.5);
+        g.tick(Input::default());
+        assert_eq!(g.safety_time_left(), None);
+        g.ship.as_mut().unwrap().position = Vec2::new(512.5, 512.5);
+        g.tick(Input::default());
+        assert_eq!(g.safety_time_left(), Some((0, 14, 59)));
     }
 
     #[test]

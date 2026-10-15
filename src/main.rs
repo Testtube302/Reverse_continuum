@@ -176,6 +176,7 @@ struct Graphics {
     explode2: Sheet,
     empburst: Sheet,
     warp: Sheet,
+    exhaust: Sheet,
     /// Ship debris, one sheet per ship type: 9 pieces (rows) x 10 rotations.
     junk: Vec<Sheet>,
     prizes: Sheet,
@@ -201,6 +202,7 @@ impl Graphics {
             explode2: Sheet::load(assets, "explode2", 80, 80),
             empburst: Sheet::load(assets, "empburst", 80, 80),
             warp: Sheet::load(assets, "warp", 48, 48),
+            exhaust: Sheet::load(assets, "exhaust", 16, 16),
             junk: ["wb", "jv", "sp", "lv", "te", "we", "nw", "sh"]
                 .iter()
                 .map(|s| Sheet::load(assets, &format!("junk{s}"), 16, 16))
@@ -390,6 +392,7 @@ async fn main() {
     }
     let mut tiles: Option<Tiles> = None;
     let mut requested_initial_ship = false;
+    let mut placed_at = false;
     let mut accumulator = 0.0f32;
     let mut frame = 0u32;
     let mut scripted_ticks = 0u32;
@@ -457,6 +460,11 @@ async fn main() {
             if let Some(n) = args.ship {
                 game.request_ship(n);
             }
+        }
+        // Online --at: place our first ship there (a test aid for reproducible comparisons).
+        if let (Some(at), Some(ship), false) = (args.at, game.ship.as_mut(), placed_at) {
+            ship.position = at;
+            placed_at = true;
         }
         let ship_keys = [KeyCode::Key1, KeyCode::Key2, KeyCode::Key3, KeyCode::Key4, KeyCode::Key5, KeyCode::Key6, KeyCode::Key7, KeyCode::Key8];
         if let Some(i) = ship_keys.iter().position(|k| is_key_pressed(*k)).filter(|_| !typing && !menu_open) {
@@ -661,6 +669,19 @@ fn draw_world(game: &Game, tiles: &Tiles, gfx: &Graphics, hud: &mut hud::Hud) {
             let (x, y) = to_screen(Vec2::new(f.x as f32, f.y as f32));
             gfx.flags.draw(row + frame, x, y);
         }
+    }
+
+    // Exhaust sits under the ships (its first frames are hidden by the ship in the original).
+    for e in &game.exhaust {
+        let (x, y) = to_screen(e.position);
+        let row = if e.afterburner { 19 } else { 0 };
+        gfx.exhaust.draw_centered(row + e.frame(), x, y);
+    }
+
+    for t in &game.trails {
+        let (x, y) = to_screen(t.position);
+        let [r, g, b] = t.color();
+        draw_rectangle(x, y, 1.0, 1.0, Color::from_rgba(r, g, b, 255));
     }
 
     for w in &game.weapons.list {
