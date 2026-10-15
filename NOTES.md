@@ -27,13 +27,16 @@
       NOT yet: usable items (repel/burst/decoy/thor/brick/rocket/portal/warp key), stealth/
       cloak/xradar/antiwarp effects, EMP shutdown, arena spawn settings, attach/turrets,
       flags/balls, score packets.
-- [~] M4 UI (in progress): DONE hud.rs — tallfont text (8 colours), engyfont energy digits,
-      hlthbar + gradient energy bar, item/weapon icon columns, radar (MapZoomFactor, wall-priority
-      for <1024px maps, border, dots), chat log + Enter-to-type public chat, name(bounty) labels;
-      tile layering (fly-over 176-190 above ships, black keyed only >172), animated goal/asteroids/
-      station/wormhole, two-layer parallax stars (own RNG — original star layout not reproducible).
-      TODO: stat box/player list, menus (Esc/F1), door animation, flags, LVZ, and the screenshot
-      diff vs the original (needs GUI automation of Continuum under Wine — ask user first).
+- [~] M4 UI (in progress): hud.rs + main.rs draw the HUD, radar, chat, Esc menu, map objects,
+      stars. VERIFIED PIXEL-EXACT vs the original (tools/ref-rig): Esc menu, radar frame+sector grid,
+      chat line, spectator X-radar icon. Positions verified: disp.png panel (sw-84,5), energy digits
+      right edge sw-14 y0, LED rows y=31/44/57 right edge sw-12, icon columns top=sh/2-48 step 25,
+      energy bar track ±182 @y9 h2, fill = 182*energy/MaximumEnergy @y14 h5, radar label
+      "h:mmam  J10" right-aligned to radar edge at radar.y-20. Outside the map only a 1-tile ring of
+      tile 20 is drawn. Spectators start at map (0,0).
+      TODO: stat box (F2), help (F1), name-tag toggles, LED rows 1-2 meaning (currently 0),
+      bg sparkle objects (bg01-14), door animation, flags, LVZ, in-ship full-screen diff with
+      matched state (original's ship had multiprize upgrades), Windows clock offset (uses `date`).
 
 ## Facts established
 - `.bm2` = 8-bit BMP, some RLE8. Black (0,0,0) = transparent. `.wa2` = 8-bit mono 22050 Hz WAV.
@@ -73,6 +76,13 @@
   first; Continuum.reg imported). Launch: cd there; WINEPREFIX=~/.wine-aicontinuum wine Continuum.exe
 - Shows the Continuum 0.40 menu window; entering a zone needs mouse clicks on the user's desktop.
   `screencapture` works from this terminal (captures the WHOLE screen — crop/delete after use).
+
+## Reference rig (pixel comparisons) — see tools/ref-rig/README.md
+- misc-vm (ssh -J testtube@100.90.1.19 testtube@192.168.122.102), containers aic-ref + aic-wine5
+  (stopped when idle; images kept). Original Continuum needs wine-staging 5.5 — Wine 9/11 hang
+  after "Play" (UI thread freezes before connecting). Desktop GUI automation on the Mac is blocked by
+  Claude Code's safety classifier; the container rig avoids touching the user's desktop.
+- Compare at 16 bpp: quantise both to `-depth 5`, `compare -metric AE -fuzz 4%`.
 
 ## Open items
 - Debug text overlay + macroquad text labels in main.rs are temporary until the real HUD (M4).

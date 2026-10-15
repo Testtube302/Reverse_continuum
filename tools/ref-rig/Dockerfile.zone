@@ -1,0 +1,21 @@
+# Isolated reference rig: original Continuum + AIContinuum.exe under Wine on a virtual X display,
+# with a local Subspace Server .NET zone. Nothing is exposed outside the container.
+FROM ubuntu:24.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN dpkg --add-architecture i386 && apt-get update && apt-get install -y --no-install-recommends \
+      wine wine32:i386 wine64 xvfb xdotool imagemagick x11-utils curl ca-certificates \
+      libicu74 libssl3 mesa-utils libgl1-mesa-dri libgl1-mesa-dri:i386 libgl1 libgl1:i386 libglx-mesa0 libglx-mesa0:i386 fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
+RUN curl -sSL https://dot.net/v1/dotnet-install.sh -o /tmp/di.sh \
+    && bash /tmp/di.sh --channel 9.0 --runtime dotnet --install-dir /opt/dotnet && rm /tmp/di.sh
+ENV PATH=/opt/dotnet:$PATH DOTNET_ROOT=/opt/dotnet
+RUN mkdir -p /opt/zone && curl -sSL https://github.com/gigamon-dev/SubspaceServer/releases/download/v4.0.0/SubspaceServer-4.0.0-linux-x64.tar.gz \
+    | tar xz -C /opt/zone --strip-components=1 \
+    && sed -i 's/^BindAddress = $/BindAddress = 127.0.0.1/' /opt/zone/conf/global.conf
+COPY cont-app.tgz /tmp/
+RUN mkdir -p /opt/cont && tar xzf /tmp/cont-app.tgz -C /opt/cont --strip-components=1 && rm /tmp/cont-app.tgz \
+    && cp /opt/cont/Continuum.exe /opt/zone/clients/ \
+    && { printf 'AIC Local,127.0.0.1,5000,,0\r\n#Local test zone\r\n'; cat /opt/cont/zone.dat; } > /tmp/z && mv /tmp/z /opt/cont/zone.dat
+ENV WINEPREFIX=/root/.wine WINEDEBUG=-all DISPLAY=:99
+WORKDIR /work
+CMD ["sleep", "infinity"]

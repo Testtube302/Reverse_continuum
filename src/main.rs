@@ -37,6 +37,8 @@ struct Args {
     mute: bool,
     /// Offline: start the ship at this tile position.
     at: Option<Vec2>,
+    /// Start with the Esc menu open (for screenshots).
+    menu: bool,
 }
 
 fn parse_args() -> Args {
@@ -53,6 +55,7 @@ fn parse_args() -> Args {
         script_fire: false,
         mute: false,
         at: None,
+        menu: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -79,6 +82,8 @@ fn parse_args() -> Args {
             "--thrust-ticks" => args.script_thrust_ticks = value().parse().unwrap_or(0),
             "--script-fire" => args.script_fire = true,
             "--mute" => args.mute = true,
+            "--fullscreen" => {}
+            "--menu" => args.menu = true,
             "--at" => {
                 let v = value();
                 let (x, y) = v.split_once(',').unwrap_or_else(|| panic!("--at x,y"));
@@ -91,7 +96,9 @@ fn parse_args() -> Args {
 }
 
 fn window_conf() -> Conf {
-    Conf { window_title: "AIContinuum".into(), window_width: 1024, window_height: 768, ..Default::default() }
+    // Read before macroquad starts: --fullscreen gives an exact 1024x768 surface without decorations.
+    let fullscreen = std::env::args().any(|a| a == "--fullscreen");
+    Conf { window_title: "AIContinuum".into(), window_width: 1024, window_height: 768, fullscreen, ..Default::default() }
 }
 
 fn die(msg: impl std::fmt::Display) -> ! {
@@ -241,6 +248,18 @@ impl Tiles {
     }
 }
 
+/// The tile drawn at (tx, ty). Outside the map the original shows only a one-tile border wall
+/// ring (tile 20), not a solid fill, even though everything outside is solid for physics.
+fn visible_tile(map: &Map, tx: i32, ty: i32) -> u8 {
+    let inside = |v: i32| (0..1024).contains(&v);
+    if inside(tx) && inside(ty) {
+        return map.tile(tx, ty);
+    }
+    let ring = |v: i32| v == -1 || v == 1024;
+    let span = |v: i32| (-1..=1024).contains(&v);
+    if (ring(tx) && span(ty)) || (ring(ty) && span(tx)) { 20 } else { 0 }
+}
+
 /// Fly-over tiles are drawn above ships.
 fn is_fly_over(id: u8) -> bool {
     (176..=190).contains(&id)
@@ -337,15 +356,31 @@ async fn main() {
     let mut frame = 0u32;
     let mut scripted_ticks = 0u32;
     let mut fire_held = false;
+    let mut menu_open = args.menu;
 
     loop {
         // Chat entry: Enter opens/sends, Esc cancels; while typing, keys go to the message.
         let typing = hud.chat_input.is_some();
-        if is_key_pressed(KeyCode::Escape) {
+        // Esc menu: Q quits, 1-8/S pick a ship, any other key resumes.
+        if menu_open {
+            if let Some(key) = get_last_key_pressed() {
+                menu_open = false;
+                let ships = [KeyCode::Key1, KeyCode::Key2, KeyCode::Key3, KeyCode::Key4, KeyCode::Key5, KeyCode::Key6, KeyCode::Key7, KeyCode::Key8];
+                if key == KeyCode::Q {
+                    break;
+                } else if let Some(i) = ships.iter().position(|k| *k == key) {
+                    game.request_ship(i as u8);
+                } else if key == KeyCode::S {
+                    game.request_ship(SPECTATOR);
+                }
+            }
+            while get_char_pressed().is_some() {}
+        } else if is_key_pressed(KeyCode::Escape) {
             if typing {
                 hud.chat_input = None;
             } else {
-                break;
+                menu_open = true;
+                while get_char_pressed().is_some() {}
             }
         }
         if is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::KpEnter) {
@@ -385,10 +420,10 @@ async fn main() {
             }
         }
         let ship_keys = [KeyCode::Key1, KeyCode::Key2, KeyCode::Key3, KeyCode::Key4, KeyCode::Key5, KeyCode::Key6, KeyCode::Key7, KeyCode::Key8];
-        if let Some(i) = ship_keys.iter().position(|k| is_key_pressed(*k)).filter(|_| !typing) {
+        if let Some(i) = ship_keys.iter().position(|k| is_key_pressed(*k)).filter(|_| !typing && !menu_open) {
             game.request_ship(i as u8);
         }
-        if !typing && is_key_pressed(KeyCode::S) && !is_key_down(KeyCode::Tab) {
+        if !typing && !menu_open && is_key_pressed(KeyCode::S) && !is_key_down(KeyCode::Tab) {
             game.request_ship(SPECTATOR);
         }
         if !typing && is_key_pressed(KeyCode::Delete) {
@@ -434,6 +469,9 @@ async fn main() {
                 game.send_updates(fired_any);
             }
             draw_world(&game, tiles.as_ref().unwrap(), &gfx, &mut hud);
+            if menu_open {
+                hud::draw_menu(&hud);
+            }
         } else {
             clear_background(BLACK);
             let status = match game.session.as_ref().map(|s| &s.phase) {
@@ -513,7 +551,7 @@ fn draw_world(game: &Game, tiles: &Tiles, gfx: &Graphics, hud: &mut hud::Hud) {
 
     let visible_tiles = || (first_ty..first_ty + rows).flat_map(move |ty| (first_tx..first_tx + cols).map(move |tx| (tx, ty)));
     for (tx, ty) in visible_tiles() {
-        let id = map.tile(tx, ty);
+        let id = visible_tile(map, tx, ty);
         if is_tileset_tile(id) && !is_fly_over(id) {
             tiles.draw(id, tx as f32 * tile - cam_x, ty as f32 * tile - cam_y);
         }
@@ -569,7 +607,7 @@ fn draw_world(game: &Game, tiles: &Tiles, gfx: &Graphics, hud: &mut hud::Hud) {
     }
 
     for (tx, ty) in visible_tiles() {
-        let id = map.tile(tx, ty);
+        let id = visible_tile(map, tx, ty);
         if is_tileset_tile(id) && is_fly_over(id) {
             tiles.draw(id, tx as f32 * tile - cam_x, ty as f32 * tile - cam_y);
         }

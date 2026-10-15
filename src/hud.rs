@@ -55,6 +55,8 @@ pub struct Hud {
     font: Texture2D,
     energy_font: Texture2D,
     healthbar: Texture2D,
+    disp: Texture2D,
+    led: Texture2D,
     gradient: Texture2D,
     icons: Texture2D,
     icon_counts: Texture2D,
@@ -69,6 +71,7 @@ pub struct Hud {
 /// Rows of `colors.png` used for radar and borders (column 0 = static colour).
 #[derive(Clone, Copy)]
 enum ColorRow {
+    Background = 16,
     Border1 = 1,
     Border2 = 2,
     Border3 = 3,
@@ -76,6 +79,7 @@ enum ColorRow {
     RadarSelf = 27,
     RadarTeam = 29,
     RadarEnemy = 34,
+    RadarGrid = 17,
 }
 
 impl Hud {
@@ -84,6 +88,8 @@ impl Hud {
             font: load_texture(assets, "tallfont"),
             energy_font: load_texture(assets, "engyfont"),
             healthbar: load_texture(assets, "hlthbar"),
+            disp: load_texture(assets, "disp"),
+            led: load_texture(assets, "led"),
             gradient: load_texture(assets, "gradient"),
             icons: load_texture(assets, "Icons"),
             icon_counts: load_texture(assets, "icondoor"),
@@ -132,48 +138,64 @@ impl Hud {
             let max_energy = settings.ships[ship.ship as usize].maximum_energy.max(1);
             self.energy_display(ship, max_energy, sw);
             self.indicators(ship, sw, sh);
+        } else if game.ship.is_none() {
+            // Spectators get only the X-radar indicator (slot 4 of the right column).
+            self.icon(37, sw - 26.0, (sh / 2.0).floor() - 48.0 + 4.0 * 25.0);
         }
         self.radar(game, sw, sh);
         self.chat(game, sw, sh);
     }
 
+    /// Top-right status panel and energy digits, and the energy bar under the health-bar frame.
+    /// Positions measured from the original client at 1024x768.
     fn energy_display(&self, ship: &Ship, max_energy: u32, sw: f32) {
-        // Digits at the top right, right-aligned, 16×24 each.
-        let mut energy = ship.energy.max(0.0) as u32;
-        let mut n = 0;
-        loop {
-            n += 1;
-            let d = energy % 10;
-            blit(&self.energy_font, Rect::new(d as f32 * 16.0, 0.0, 16.0, 24.0), sw - n as f32 * 16.0, 0.0);
-            energy /= 10;
-            if energy == 0 {
-                break;
-            }
+        blit(&self.disp, Rect::new(0.0, 0.0, 84.0, 68.0), sw - 84.0, 5.0);
+
+        // Energy: 16x24 digits right-aligned to 14 px from the screen edge.
+        let digits = (ship.energy.max(0.0) as u32).to_string();
+        let mut x = sw - 14.0 - digits.len() as f32 * 16.0;
+        for c in digits.bytes() {
+            let d = (c - b'0') as f32;
+            blit(&self.energy_font, Rect::new(d * 16.0, 0.0, 16.0, 24.0), x, 0.0);
+            x += 16.0;
         }
 
-        // Energy bar: grey track for this ship's capacity, coloured fill for current energy,
-        // mirrored either side of the centre, under the health bar frame.
+        // Three LED counters (7x10 digits) right-aligned in the panel windows.
+        // TODO: rows 1 and 2 are always 0 for us; identify what the original shows there.
+        self.led(0, sw - 12.0, 31.0);
+        self.led(0, sw - 33.0, 44.0);
+        self.led(0, sw - 12.0, 44.0);
+        self.led(ship.bounty, sw - 12.0, 57.0);
+
+        // Energy bar: a 2 px track and a 5 px animated fill, mirrored around the centre.
+        // The fill is scaled by current energy over the arena's MaximumEnergy.
+        const HALF: f32 = 182.0;
         let (bar_w, bar_h) = (116.0, 28.0);
-        let center = vec2((sw / 2.0).floor(), bar_h / 2.0);
-        let capacity = ship.max_energy as f32 / max_energy as f32 * 240.0;
-        let frac = (ship.energy / ship.max_energy.max(1) as f32).clamp(0.0, 1.0);
-        let view = frac * capacity;
-        let row = if frac > 0.5 { 0.0 } else if frac > 0.25 { 1.0 } else { 2.0 };
+        let cx = (sw / 2.0).floor();
+        let frac = (ship.energy / max_energy as f32).clamp(0.0, 1.0);
+        let view = (HALF * frac).round();
+        let health = ship.energy / ship.max_energy.max(1) as f32;
+        let row = if health > 0.5 { 0.0 } else if health > 0.25 { 1.0 } else { 2.0 };
         let anim = ((get_time() * 10.0) as u32 % 14) as f32;
-        let full = Rect::new(5.0, 0.0, 1.0, 1.0);
-        let track = Rect::new(0.0, 0.0, 1.0, 1.0);
-        blit_scaled(&self.gradient, full, center.x - 240.0, center.y - 4.0, 240.0, 2.0);
-        blit_scaled(&self.gradient, full, center.x, center.y - 4.0, 240.0, 2.0);
-        blit_scaled(&self.gradient, track, center.x - capacity, center.y - 4.0, capacity, 2.0);
-        blit_scaled(&self.gradient, track, center.x, center.y - 4.0, capacity, 2.0);
+        let track = Rect::new(5.0, 0.0, 1.0, 1.0);
+        blit_scaled(&self.gradient, track, cx - HALF, 9.0, HALF * 2.0, 2.0);
         let fill = Rect::new(anim, row, 1.0, 1.0);
-        blit_scaled(&self.gradient, fill, center.x - view, center.y, view, 6.0);
-        blit_scaled(&self.gradient, fill, center.x, center.y, view, 6.0);
-        blit(&self.healthbar, Rect::new(0.0, 0.0, bar_w, bar_h), center.x - bar_w / 2.0, 0.0);
+        blit_scaled(&self.gradient, fill, cx - view, 14.0, view * 2.0, 5.0);
+        blit(&self.healthbar, Rect::new(0.0, 0.0, bar_w, bar_h), cx - bar_w / 2.0, 0.0);
+    }
+
+    /// Draws `value` in red LED digits ending at `right`.
+    fn led(&self, value: u32, right: f32, y: f32) {
+        let digits = value.to_string();
+        let mut x = right - digits.len() as f32 * 7.0;
+        for c in digits.bytes() {
+            blit(&self.led, Rect::new((c - b'0') as f32 * 7.0, 0.0, 7.0, 10.0), x, y);
+            x += 7.0;
+        }
     }
 
     fn indicators(&self, ship: &Ship, sw: f32, sh: f32) {
-        let top = (sh * 0.57 + 1.0).floor() - 25.0 * 4.0;
+        let top = (sh / 2.0).floor() - 48.0;
         // Left column: items (burst, repel, decoy, thor, brick, rocket, portal) with counts.
         // ship.items order: repel, burst, decoy, thor, brick, rocket, portal.
         let left = [(ship.items[1], 30), (ship.items[0], 31), (ship.items[2], 40), (ship.items[3], 41), (ship.items[4], 42), (ship.items[5], 43), (ship.items[6], 46)];
@@ -293,6 +315,26 @@ impl Hud {
         let pos = vec2(sw - dim - RADAR_BORDER, sh - dim - RADAR_BORDER);
         draw_texture(tex, pos.x, pos.y, WHITE);
 
+        // Sector grid: the map is 20x20 sectors (A-T across, 1-20 down).
+        for k in 1..20u32 {
+            let line = (k * full_dim) as f32 / 20.0;
+            let gx = (line - min_x as f32).floor();
+            if (0.0..dim).contains(&gx) {
+                self.swatch(ColorRow::RadarGrid, pos.x + gx, pos.y, 1.0, dim);
+            }
+            let gy = (line - min_y as f32).floor();
+            if (0.0..dim).contains(&gy) {
+                self.swatch(ColorRow::RadarGrid, pos.x, pos.y + gy, dim, 1.0);
+            }
+        }
+
+        // Clock and current sector above the radar, right-aligned to its edge.
+        let sector_x = ((center.x / 51.2) as u32).min(19);
+        let sector_y = ((center.y / 51.2) as u32).min(19);
+        let sector = format!("{}{}", (b'A' + sector_x as u8) as char, sector_y + 1);
+        let label = format!("{}  {sector}", clock_text());
+        self.text(&label, TextColor::White, pos.x + dim - label.len() as f32 * FONT_W, pos.y - 20.0);
+
         let world_min = vec2(min_x as f32, min_y as f32) * 1024.0 / full_dim as f32;
         let world_dim = view as f32 * 1024.0 / full_dim as f32;
         let dot = |hud: &Self, p: Vec2, row: ColorRow, size: f32| {
@@ -373,4 +415,72 @@ impl Hud {
         let color = if team { TextColor::Yellow } else { TextColor::Blue };
         self.text(&format!("{name}({bounty})"), color, ship_screen.0 + 18.0, ship_screen.1 + 18.0);
     }
+}
+
+/// Local wall-clock time as Continuum shows it above the radar, e.g. "12:00am".
+fn clock_text() -> String {
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let offset = local_utc_offset_secs();
+    let day_secs = (secs as i64 + offset).rem_euclid(86_400);
+    let (h, m) = (day_secs / 3600, day_secs / 60 % 60);
+    let h12 = if h % 12 == 0 { 12 } else { h % 12 };
+    format!("{h12}:{m:02}{}", if h < 12 { "am" } else { "pm" })
+}
+
+/// Local timezone offset, from the TZ-aware `date` output on Unix; UTC elsewhere.
+fn local_utc_offset_secs() -> i64 {
+    static OFFSET: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
+    *OFFSET.get_or_init(|| {
+        let out = std::process::Command::new("date").arg("+%z").output().ok();
+        let z = out.and_then(|o| String::from_utf8(o.stdout).ok()).unwrap_or_default();
+        let z = z.trim();
+        if z.len() == 5 {
+            let sign = if z.starts_with('-') { -1 } else { 1 };
+            let h: i64 = z[1..3].parse().unwrap_or(0);
+            let m: i64 = z[3..5].parse().unwrap_or(0);
+            sign * (h * 3600 + m * 60)
+        } else {
+            0
+        }
+    })
+}
+
+/// The Esc menu, laid out as measured from the original client.
+pub fn draw_menu(hud: &Hud) {
+    const LEFT: [&str; 12] = [
+        "Q  = Quit",
+        "F1 = Help",
+        "F2 = Stat box",
+        "F3 = Name tags",
+        "F4 = Radar",
+        "F5 = Messages",
+        "F6 = Help ticker",
+        "F8 = Engine sounds",
+        " A = Arena List",
+        " B = Set Banner",
+        " I = Ignore macros",
+        "PgUp/PgDn = Adjust stat box",
+    ];
+    const SHIPS: [&str; 9] =
+        ["1 = Warbird", "2 = Javelin", "3 = Spider", "4 = Leviathan", "5 = Terrier", "6 = Weasel", "7 = Lancaster", "8 = Shark", "S = Spectator"];
+    let (x0, x1, y0, y1) = (370.0, 659.0, 0.0, 176.0);
+    hud.swatch(ColorRow::Background, x0 + 3.0, y0 + 3.0, x1 - x0 - 5.0, y1 - y0 - 5.0);
+    // Three bevel rings; the outermost one skips two pixels at each corner.
+    for (inset, row, cut) in [(2.0, ColorRow::Border1, 0.0), (1.0, ColorRow::Border2, 0.0), (0.0, ColorRow::Border3, 2.0)] {
+        let (l, r, t, b) = (x0 + inset, x1 - inset, y0 + inset, y1 - inset);
+        hud.swatch(row, l + cut, t, r - l + 1.0 - 2.0 * cut, 1.0);
+        hud.swatch(row, l + cut, b, r - l + 1.0 - 2.0 * cut, 1.0);
+        hud.swatch(row, l, t + cut, 1.0, b - t + 1.0 - 2.0 * cut);
+        hud.swatch(row, r, t + cut, 1.0, b - t + 1.0 - 2.0 * cut);
+    }
+    hud.swatch(ColorRow::Border1, x0 + 3.0, 16.0, x1 - x0 - 5.0, 1.0);
+    hud.text("-= Menu =-", TextColor::Green, 463.0, 4.0);
+    for (i, line) in LEFT.iter().enumerate() {
+        hud.text(line, TextColor::White, 375.0, 18.0 + i as f32 * 12.0);
+    }
+    hud.text("Ships", TextColor::DarkRed, 567.0, 18.0);
+    for (i, line) in SHIPS.iter().enumerate() {
+        hud.text(line, TextColor::White, 551.0, 30.0 + i as f32 * 12.0);
+    }
+    hud.text("Any other key to resume game", TextColor::Yellow, 407.0, 162.0);
 }

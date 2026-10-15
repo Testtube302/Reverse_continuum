@@ -1,0 +1,19 @@
+# Original Continuum on wine-staging 5.5 (the last version reported to run it), virtual display.
+# Run with --network container:aic-ref to reach that container's local zone on 127.0.0.1:5000.
+# Ubuntu's own wine packages are installed only to pull in the runtime libraries; the WineHQ
+# 5.5 builds are unpacked into /opt/wine-staging (their FAudio dependency, used only for XAudio2,
+# is no longer published for 18.04 and isn't needed by Continuum).
+FROM ubuntu:18.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN dpkg --add-architecture i386 && apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates curl xvfb xdotool imagemagick x11-utils wine64 wine32 libgl1-mesa-dri:i386 libgl1-mesa-glx:i386 \
+    && rm -rf /var/lib/apt/lists/*
+RUN cd /tmp && for p in wine-staging-i386_5.5~bionic_i386 wine-staging-amd64_5.5~bionic_amd64 wine-staging_5.5~bionic_amd64; do \
+      a=${p##*_}; curl -sSfL -o $p.deb "https://dl.winehq.org/wine-builds/ubuntu/dists/bionic/main/binary-$a/$(echo $p | sed 's/~/%7E/').deb" \
+      && dpkg -x $p.deb / ; done && rm -f /tmp/*.deb && /opt/wine-staging/bin/wine --version
+ENV PATH=/opt/wine-staging/bin:$PATH WINEPREFIX=/root/.wine WINEDEBUG=-all DISPLAY=:98
+COPY cont-app.tgz /tmp/
+RUN mkdir -p /opt/cont && tar xzf /tmp/cont-app.tgz -C /opt/cont --strip-components=1 && rm /tmp/cont-app.tgz \
+    && printf 'AIC Local,127.0.0.1,5000,,0\r\n#Local test zone\r\n' > /opt/cont/zone.dat
+WORKDIR /work
+CMD ["sleep", "infinity"]

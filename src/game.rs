@@ -93,7 +93,8 @@ impl Game {
             effects: Vec::new(),
             sounds: Vec::new(),
             notices: Vec::new(),
-            camera: Vec2::new(512.0, 512.0),
+            // Spectators start at the map's top-left corner, as in the original.
+            camera: Vec2::new(0.0, 0.0),
             kills: 0,
             deaths: 0,
             rng: 0x1234_5678,
