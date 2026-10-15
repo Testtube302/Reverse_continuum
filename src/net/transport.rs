@@ -178,6 +178,11 @@ impl Transport {
         loop {
             match self.sock.recv(&mut buf) {
                 Ok(n) if n > 0 => {
+                    // Reject oversized datagrams before indexing the fixed VIE keystream.
+                    // Keep the receive buffer larger than MAX_PACKET to detect truncation.
+                    if n > MAX_PACKET {
+                        continue;
+                    }
                     self.packets_received = self.packets_received.wrapping_add(1);
                     self.last_recv_tick = now_tick();
                     let mut pkt = buf[..n].to_vec();
@@ -397,6 +402,22 @@ mod tests {
     fn settle(t: &mut Transport) -> Vec<Event> {
         std::thread::sleep(std::time::Duration::from_millis(20));
         t.poll()
+    }
+
+    #[test]
+    fn oversized_encrypted_datagrams_are_dropped() {
+        let (mut t, server, client) = pair();
+        assert!(t.vie.initialize(t.vie.client_key.wrapping_neg()));
+        for len in [2048, MAX_PACKET + 1, 4096] {
+            server.send_to(&vec![0x03; len], client).unwrap();
+            assert!(settle(&mut t).is_empty());
+        }
+        let mut valid = vec![0x03; MAX_PACKET];
+        let expected = valid.clone();
+        t.vie.encrypt(&mut valid);
+        server.send_to(&valid, client).unwrap();
+        assert_eq!(settle(&mut t), vec![Event::Packet(expected)]);
+        assert_eq!(t.state, State::Connected);
     }
 
     #[test]

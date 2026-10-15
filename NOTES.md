@@ -289,6 +289,11 @@
 - VMs on apollo can't reach the public address (no hairpin NAT); use 192.168.122.50 from inside.
 
 ## Open items
+- 2026-10-15 protocol review: see docs/protocol-compatibility-review.md for pinned
+  SS.NET sources separating listener policy, transport encryption, login format,
+  and executable validation. Continuum encryption remains unimplemented. Fixed
+  oversized UDP input panicking in VIE keystream indexing; encrypted loopback
+  regression reproduces the old failure and passes after the receive-size guard.
 - Debug text overlay + macroquad text labels in main.rs are temporary until the real HUD (M4).
 - Haven't yet run the original Continuum.exe under Wine against the local zone (integration phase).
 
