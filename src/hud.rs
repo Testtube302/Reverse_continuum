@@ -693,8 +693,10 @@ pub fn draw_statbox(hud: &Hud, game: &Game, view: u8) {
                 .iter()
                 .map(|p| {
                     let c = color(p.freq);
-                    // Ave = points per kill; R (rating) isn't worked out yet and shows 0.
-                    let ave = if p.wins > 0 { points(p) as f32 / p.wins as f32 } else { 0.0 };
+                    // Ave = average bounty of the players they killed (measured: two kills of a
+                    // 49-bounty ship gave 49.0 while points were 196). R (rating) isn't worked out
+                    // yet and shows 0 (one sample: 196 points, W2 L0 -> R 11).
+                    let ave = if p.wins > 0 { p.kill_bounty_sum as f32 / p.wins as f32 } else { 0.0 };
                     Row {
                         marker: marker(p),
                         runs: vec![

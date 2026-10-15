@@ -99,7 +99,10 @@
       ours shows them, nothing client-side needed. Ball flight: 7 positions of a thrown ball in
       the original fit our physics (friction 5, 4000 px/10 s) with 0.047-tile RMS. Fixed: ball
       physics now runs for spectators too (it froze when not in a ship). Test aid --carry-to
-      X,Y,DIR (teleport with the ball, throw 300 frames later, spectate 100 after). Lesson: frames can pass with no game tick, so test aids hold keys for many frames
+      X,Y,DIR (teleport with the ball, throw 300 frames later, spectate 100 after).
+      F2 W/L view measured with scores (bot killed the original twice, InitialBounty=50 for the
+      test, restored to 0): Hunter2 196 points, W2 L0, R 11, Ave 49.0 — Ave is the average bounty
+      of victims (death packets), not points per kill; fixed. R formula still unknown (shows 0). Lesson: frames can pass with no game tick, so test aids hold keys for many frames
       and runs must be long (ball positions are only resent every SendTime=5 s).
       Rig lessons: --screenshot runs exit after --frames (faster than 60 fps) — give a big
       --frames; xdotool focus on our Wine window is unreliable, so use --attach-to NAME / --freq N.
@@ -249,8 +252,8 @@
   C=aic-wine5 to target the original's container) and crop.sh. Start: `docker start aic-ref aic-wine5`,
   clear /tmp/.X99-lock, start Xvfb :99 x16, zone-restart.sh, then join5.sh in aic-wine5.
 - Next: gameplay items done. Zone VM (Ryan to confirm) and integration incl. the
-  Continuum-encryption question (see memory: research public docs first, no RE). Loose ends:
-  ball rest position vs original, goal message, R rating, turret sprite on carrier.
+  Continuum-encryption question (see memory: research public docs first, no RE). Loose ends
+  left: R rating formula (needs more score samples), turret sprite on the carrier, starfield.
 - Rig arena gives Warbirds 2 of every item (InitialRepel..InitialPortal).
 - The rig's centre safe zone has wall pieces: bots chasing the original get stuck behind them.
   Move the original into open space first (Up 1.2 s, wait, Down 1.2 s).

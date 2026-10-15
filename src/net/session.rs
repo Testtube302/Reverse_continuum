@@ -97,6 +97,8 @@ pub struct Player {
     pub flag_points: u32,
     pub wins: u16,
     pub losses: u16,
+    /// Sum of the bounties of the players this one killed while we watched (for F2's "Ave").
+    pub kill_bounty_sum: u32,
     /// The player this one is attached to as a turret.
     pub attached_to: Option<u16>,
     pub bounty: u16,
@@ -632,6 +634,7 @@ impl Session {
                         dead: false,
                         flags_carried: u16_at(rec, 61).unwrap_or(0),
                         attached_to: u16_at(rec, 59).filter(|&a| a != 0xFFFF),
+                        kill_bounty_sum: 0,
                     };
                     self.note(format!("player entered: {} (pid {}, ship {})", pl.name, pl.pid, pl.ship));
                     if self.joined {
@@ -716,6 +719,7 @@ impl Session {
                     }
                     if let Some(pl) = self.players.get_mut(&killer) {
                         pl.wins = pl.wins.wrapping_add(1);
+                        pl.kill_bounty_sum += bounty as u32;
                     }
                     let name = |pid| self.players.get(&pid).map(|p| p.name.clone()).unwrap_or_default();
                     let (victim_name, killer_name) = (name(killed), name(killer));
