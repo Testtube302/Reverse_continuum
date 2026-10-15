@@ -135,6 +135,8 @@ pub struct Ship {
     next_repel_tick: u32,
     /// Ticks of rocket left: thrust forward at RocketThrust up to RocketSpeed, no afterburner.
     pub rocket_ticks: u32,
+    /// Ticks left of an EMP recharge shutdown.
+    pub emp_ticks: u32,
     /// Stealth/cloak/X-radar/antiwarp bits that are on, plus a pending flash (uncloaking).
     pub status: u8,
     /// An active portal: where it is and ticks left.
@@ -205,6 +207,7 @@ impl Ship {
             repel_ticks: 0,
             next_repel_tick: 0,
             rocket_ticks: 0,
+            emp_ticks: 0,
             status: 0,
             portal: None,
             portal_held: false,
@@ -464,7 +467,11 @@ impl Ship {
         if afterburner {
             self.energy -= ab_cost;
         }
-        self.energy = (self.energy + self.recharge as f32 / 10.0 * dt).min(self.max_energy as f32);
+        if self.emp_ticks > 0 {
+            self.emp_ticks -= 1;
+        } else {
+            self.energy = (self.energy + self.recharge as f32 / 10.0 * dt).min(self.max_energy as f32);
+        }
         // Toggles cost energy per 10 s and switch off when it runs out (reference client order).
         for (bit, cost) in [
             (STATUS_XRADAR, s.xradar_energy),

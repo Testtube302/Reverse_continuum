@@ -135,6 +135,9 @@ pub struct ArenaSettings {
     pub bounty_increase_for_kill: u32,
     /// Percentages are in tenths of a percent (1000 = 100%).
     pub bbomb_damage_percent: u32,
+    /// EMP bombs: recharge shutdown (ticks at full damage) and damage scale (per mille).
+    pub ebomb_shutdown_time: u32,
+    pub ebomb_damage_percent: u32,
     pub shrapnel_damage_percent: u32,
     pub exact_damage: bool,
     pub shrapnel_random: bool,
@@ -295,6 +298,8 @@ impl ArenaSettings {
             bounty_increase_for_kill: u16_at(p, 1270),
             bounce_factor: u16_at(p, 1272),
             bbomb_damage_percent: u16_at(p, 1332),
+            ebomb_shutdown_time: u16_at(p, 1322),
+            ebomb_damage_percent: u16_at(p, 1324),
             shrapnel_damage_percent: u16_at(p, 1334),
             shrapnel_random: p[1368] != 0,
             team_max_mines: u8_at(p, 1375),
@@ -435,6 +440,8 @@ impl Default for ArenaSettings {
             proximity_distance: 3,
             bounty_increase_for_kill: 0,
             bbomb_damage_percent: 1000,
+            ebomb_shutdown_time: 1000,
+            ebomb_damage_percent: 1000,
             shrapnel_damage_percent: 1000,
             exact_damage: true,
             shrapnel_random: false,

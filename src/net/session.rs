@@ -92,6 +92,11 @@ pub struct Player {
     pub direction: u8,
     /// Stealth/cloak/X-radar/antiwarp/flash bits from their last position packet.
     pub status: u8,
+    /// Score: kill and flag points, kills (wins) and deaths (losses).
+    pub kill_points: u32,
+    pub flag_points: u32,
+    pub wins: u16,
+    pub losses: u16,
     pub bounty: u16,
     pub energy: u16,
     /// Latency in 10 ms units, as relayed in position packets.
@@ -558,6 +563,10 @@ impl Session {
                         velocity: Vec2::default(),
                         direction: 0,
                         status: 0,
+                        kill_points: u32_at(rec, 43).unwrap_or(0),
+                        flag_points: u32_at(rec, 47).unwrap_or(0),
+                        wins: u16_at(rec, 55).unwrap_or(0),
+                        losses: u16_at(rec, 57).unwrap_or(0),
                         bounty: 0,
                         energy: 0,
                         ping: 0,
@@ -583,12 +592,26 @@ impl Session {
                 }
             }
             0x21 => self.on_brick(p),
+            // Score update: pid, kill points, flag points, kills, deaths.
+            0x09 => {
+                if let (Some(pid), Some(kp), Some(fp), Some(w), Some(l)) =
+                    (u16_at(p, 1), u32_at(p, 3), u32_at(p, 7), u16_at(p, 11), u16_at(p, 13))
+                {
+                    if let Some(pl) = self.players.get_mut(&pid) {
+                        (pl.kill_points, pl.flag_points, pl.wins, pl.losses) = (kp, fp, w, l);
+                    }
+                }
+            }
             0x05 => self.on_large_position(p),
             0x28 => self.on_small_position(p),
             0x06 => {
                 if let (Some(killer), Some(killed), Some(bounty)) = (u16_at(p, 2), u16_at(p, 4), u16_at(p, 6)) {
                     if let Some(pl) = self.players.get_mut(&killed) {
                         pl.dead = true;
+                        pl.losses = pl.losses.wrapping_add(1);
+                    }
+                    if let Some(pl) = self.players.get_mut(&killer) {
+                        pl.wins = pl.wins.wrapping_add(1);
                     }
                     let name = |pid| self.players.get(&pid).map(|p| p.name.clone()).unwrap_or_default();
                     let (victim_name, killer_name) = (name(killed), name(killer));

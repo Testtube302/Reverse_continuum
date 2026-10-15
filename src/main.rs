@@ -41,8 +41,8 @@ struct Args {
     at: Option<Vec2>,
     /// Start with the Esc menu open (for screenshots).
     menu: bool,
-    /// Start with the F2 stat box shown.
-    statbox: bool,
+    /// Start with this F2 stat box view shown (0-5).
+    statbox: Option<u8>,
     /// Start with this F1 help page open.
     help: Option<usize>,
     /// Spectate following this player's ship.
@@ -65,7 +65,7 @@ fn parse_args() -> Args {
         mute: false,
         at: None,
         menu: false,
-        statbox: false,
+        statbox: None,
         help: None,
         follow: None,
     };
@@ -97,7 +97,7 @@ fn parse_args() -> Args {
             "--mute" => args.mute = true,
             "--fullscreen" => {}
             "--menu" => args.menu = true,
-            "--statbox" => args.statbox = true,
+            "--statbox" => args.statbox = Some(value().parse().unwrap_or(0)),
             "--help-page" => args.help = value().parse().ok(),
             "--follow" => args.follow = Some(value()),
             "--at" => {
@@ -181,6 +181,7 @@ struct Graphics {
     empburst: Sheet,
     warp: Sheet,
     repel: Sheet,
+    spark: Sheet,
     exhaust: Sheet,
     rocket: Sheet,
     portal: Sheet,
@@ -212,6 +213,7 @@ impl Graphics {
             empburst: Sheet::load(assets, "empburst", 80, 80),
             warp: Sheet::load(assets, "warp", 48, 48),
             repel: Sheet::load(assets, "repel", 96, 96),
+            spark: Sheet::load(assets, "spark", 40, 40),
             exhaust: Sheet::load(assets, "exhaust", 16, 16),
             rocket: Sheet::load(assets, "rocket", 24, 24),
             portal: Sheet::load(assets, "warppnt", 16, 16),
@@ -379,7 +381,7 @@ async fn main() {
     let assets = AssetDir::locate(args.assets.as_deref()).unwrap_or_else(|e| die(e));
     let gfx = Graphics::load(&assets);
     let mut hud = hud::Hud::load(&assets);
-    hud.show_statbox = args.statbox;
+    hud.statbox = args.statbox;
     let mut sounds = Sounds { clips: HashMap::new(), muted: args.mute || args.screenshot.is_some() };
 
     let mut game = match args.connect {
@@ -522,7 +524,12 @@ async fn main() {
             };
         }
         if !typing && !menu_open && is_key_pressed(KeyCode::F2) {
-            hud.show_statbox = !hud.show_statbox;
+            // F2 cycles the six stat box views, then hides it.
+            hud.statbox = match hud.statbox {
+                None => Some(0),
+                Some(v) if v < 5 => Some(v + 1),
+                Some(_) => None,
+            };
         }
         let shift_down = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
         if !typing && !shift_down && is_key_pressed(KeyCode::Delete) {
@@ -574,8 +581,8 @@ async fn main() {
                 game.send_updates(fired_any);
             }
             draw_world(&game, tiles.as_ref().unwrap(), &gfx, &mut hud);
-            if hud.show_statbox {
-                hud::draw_statbox(&hud, &game);
+            if let Some(view) = hud.statbox {
+                hud::draw_statbox(&hud, &game, view);
             }
             if let Some(page) = help_page {
                 hud::draw_help(&hud, page);
@@ -826,6 +833,7 @@ fn draw_world(game: &Game, tiles: &Tiles, gfx: &Graphics, hud: &mut hud::Hud) {
             EffectKind::ShipExplosion => &gfx.explode1,
             EffectKind::Warp => &gfx.warp,
             EffectKind::Repel => &gfx.repel,
+            EffectKind::EmpSpark => &gfx.spark,
         };
         let n = sheet.frame_count();
         sheet.draw_centered((e.age * n / e.kind.duration()).min(n - 1), x, y);

@@ -599,6 +599,28 @@ fn simulate(
 }
 
 /// Damage the local ship takes from `w`. `random` returns a value in 0..n.
+/// Ticks an EMP bomb's `damage` shuts down our recharge: EBombShutdownTime scaled by the
+/// share of the bomb's full (EMP-scaled) damage that we took (reference client).
+pub fn emp_shutdown_ticks(w: &Weapon, damage: i32, shooter_ship: u8, settings: &ArenaSettings) -> u32 {
+    if !w.emp || damage <= 0 {
+        return 0;
+    }
+    let mut bomb = settings.bomb_damage_level;
+    let level = w.data.level() as i32;
+    if w.data.kind() == WeaponKind::Thor {
+        bomb += bomb * level * level;
+    }
+    let mut bomb = bomb / 1000;
+    bomb = (bomb as f32 * settings.ebomb_damage_percent as f32 / 1000.0) as i32;
+    if settings.ships[shooter_ship.min(7) as usize].bomb_bounce_count > 0 {
+        bomb = (bomb as f32 * settings.bbomb_damage_percent as f32 / 1000.0) as i32;
+    }
+    if bomb <= 0 {
+        return 0;
+    }
+    (settings.ebomb_shutdown_time as i64 * damage as i64 / bomb as i64).max(0) as u32
+}
+
 pub fn damage_to_local(
     w: &Weapon,
     me: &Target,
@@ -634,6 +656,9 @@ pub fn damage_to_local(
                 level += 3;
             }
             let mut bomb = bomb / 1000;
+            if w.emp {
+                bomb = (bomb as f32 * settings.ebomb_damage_percent as f32 / 1000.0) as i32;
+            }
             if settings.ships[shooter_ship.min(7) as usize].bomb_bounce_count > 0 {
                 bomb = (bomb as f32 * settings.bbomb_damage_percent as f32 / 1000.0) as i32;
             }

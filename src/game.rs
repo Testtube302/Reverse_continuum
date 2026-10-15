@@ -69,6 +69,8 @@ pub enum EffectKind {
     Warp,
     /// repel.png: 10 frames over ~0.59 s.
     Repel,
+    /// spark.png, dropped every 15 ticks while EMPed: 10 frames over 0.5 s.
+    EmpSpark,
 }
 
 impl EffectKind {
@@ -79,6 +81,7 @@ impl EffectKind {
             Self::ShipExplosion => SHIP_EXPLOSION_TICKS,
             Self::Warp => WARP_TICKS,
             Self::Repel => 59, // 10 frames at ~59 ms, measured
+            Self::EmpSpark => 50,
         }
     }
 }
@@ -526,6 +529,11 @@ impl Game {
             // The safety clock restarts from SafetyLimit on every entry (measured).
             self.safe_ticks = if in_safe { self.safe_ticks + 1 } else { 0 };
             let old_pos = ship.position;
+            if ship.emp_ticks > 0 && ship.emp_ticks % 15 == 0 {
+                let position = ship.position;
+                self.effects.push(Effect { kind: EffectKind::EmpSpark, position, age: 0 });
+            }
+            let ship = self.ship.as_mut().unwrap();
             let at = ship.position;
             let antiwarper = self.antiwarped_by(at, &settings);
             let ship = self.ship.as_mut().unwrap();
@@ -963,6 +971,13 @@ impl Game {
         };
         if damage <= 0 {
             return;
+        }
+        // An enemy EMP bomb also stops our recharge for a while (not in safe zones).
+        if w.pid != local && map.tile(ship.position.x as i32, ship.position.y as i32) != TILE_SAFE {
+            let t = crate::weapons::emp_shutdown_ticks(w, damage, shooter_ship, settings);
+            if t > 0 {
+                ship.emp_ticks = t;
+            }
         }
         if ship.energy < damage as f32 {
             if w.data.kind().is_bomb() && w.pid == local {

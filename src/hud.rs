@@ -59,7 +59,8 @@ pub struct Hud {
     disp: Texture2D,
     led: Texture2D,
     spectate: Texture2D,
-    pub show_statbox: bool,
+    /// F2 stat box view (0 names, 1 points, 2 point sort, 3 team sort, 4 W/L, 5 teams), or none.
+    pub statbox: Option<u8>,
     gradient: Texture2D,
     icons: Texture2D,
     dropflag: Texture2D,
@@ -97,7 +98,7 @@ impl Hud {
             disp: load_texture(assets, "disp"),
             led: load_texture(assets, "led"),
             spectate: load_texture(assets, "spectate"),
-            show_statbox: false,
+            statbox: None,
             gradient: load_texture(assets, "gradient"),
             icons: load_texture(assets, "Icons"),
             dropflag: load_texture(assets, "dropflag"),
@@ -600,33 +601,155 @@ pub fn draw_menu(hud: &Hud) {
 
 /// F2 stat box (player names view), laid out as in the original: a 108 px wide box at the
 /// top left with the player count centred in the header and one 12 px row per player.
-pub fn draw_statbox(hud: &Hud, game: &Game) {
+pub fn draw_statbox(hud: &Hud, game: &Game, view: u8) {
     let Some(s) = &game.session else { return };
     let Some(me) = s.me() else { return };
+    let points = |p: &aicontinuum::net::session::Player| p.kill_points + p.flag_points;
+    let color = |freq: u16| if freq == me.freq { TextColor::Yellow } else { TextColor::White };
     let mut players: Vec<_> = s.players.values().collect();
     players.sort_by_key(|p| (p.pid != me.pid, p.name.to_lowercase()));
-    let max_rows = ((screen_height() / 2.0 - 60.0) / 12.0).max(1.0) as usize;
-    let rows = players.len().min(max_rows);
-    let (w, h) = (108.0, 14.0 + 1.0 + rows as f32 * 12.0);
-    hud.swatch(ColorRow::Background, 3.0, 3.0, w, h);
+
+    // Each row: optional marker (spectate.png frame), then text runs (x, colour, right-aligned?).
+    struct Row {
+        marker: Option<u32>,
+        runs: Vec<(f32, TextColor, bool, String)>,
+    }
+    let marker = |p: &aicontinuum::net::session::Player| match (p.pid == me.pid, p.ship >= 8) {
+        (true, false) => Some(0),
+        (false, true) => Some(1),
+        (true, true) => Some(2),
+        _ => None,
+    };
+    let name = |p: &aicontinuum::net::session::Player| p.name.chars().take(12).collect::<String>();
     let count = players.len().to_string();
-    hud.text(&count, TextColor::Green, 49.0 - count.len() as f32 * FONT_W / 2.0, 4.0);
+    // Box width, header runs, rows: measured from the original's six F2 views.
+    let (w, header, rows): (f32, Vec<(f32, TextColor, bool, String)>, Vec<Row>) = match view {
+        1..=3 => {
+            let title = ["Points", "Point Sort", "Team Sort"][view as usize - 1];
+            let header = vec![(49.0, TextColor::Green, false, count.clone()), (173.0, TextColor::Green, true, title.into())];
+            let player_row = |p: &&aicontinuum::net::session::Player| Row {
+                marker: marker(p),
+                runs: vec![(13.0, color(p.freq), false, name(p)), (173.0, color(p.freq), true, points(p).to_string())],
+            };
+            let rows = match view {
+                1 => players.iter().map(player_row).collect(),
+                2 => {
+                    let mut sorted = players.clone();
+                    sorted.sort_by_key(|p| (std::cmp::Reverse(points(p)), p.name.to_lowercase()));
+                    sorted.iter().map(player_row).collect()
+                }
+                _ => {
+                    let mut freqs: Vec<u16> = players.iter().filter(|p| p.ship < 8).map(|p| p.freq).collect();
+                    freqs.sort();
+                    freqs.dedup();
+                    let mut rows = Vec::new();
+                    for f in freqs {
+                        let team: Vec<_> = players.iter().filter(|p| p.ship < 8 && p.freq == f).collect();
+                        rows.push(Row {
+                            marker: None,
+                            runs: vec![
+                                (5.0, TextColor::DarkRed, false, format!("{f:04}-------------")),
+                                (165.0, TextColor::DarkRed, true, team.len().to_string()),
+                            ],
+                        });
+                        rows.extend(team.into_iter().map(player_row));
+                    }
+                    rows
+                }
+            };
+            (172.0, header, rows)
+        }
+        4 => {
+            let header = vec![
+                (49.0, TextColor::Green, false, count.clone()),
+                (173.0, TextColor::Green, true, "Squad".into()),
+                (245.0, TextColor::Green, true, "W".into()),
+                (285.0, TextColor::Green, true, "L".into()),
+                (325.0, TextColor::Green, true, "R".into()),
+                (381.0, TextColor::Green, true, "Ave".into()),
+            ];
+            let rows = players
+                .iter()
+                .map(|p| {
+                    let c = color(p.freq);
+                    // Ave = points per kill; R (rating) isn't worked out yet and shows 0.
+                    let ave = if p.wins > 0 { points(p) as f32 / p.wins as f32 } else { 0.0 };
+                    Row {
+                        marker: marker(p),
+                        runs: vec![
+                            (13.0, c, false, name(p)),
+                            (133.0, c, false, p.squad.chars().take(10).collect()),
+                            (253.0, c, true, p.wins.to_string()),
+                            (293.0, c, true, p.losses.to_string()),
+                            (333.0, c, true, "0".into()),
+                            (381.0, c, true, format!("{ave:.1}")),
+                        ],
+                    }
+                })
+                .collect();
+            (380.0, header, rows)
+        }
+        5 => {
+            let header = vec![
+                (13.0, TextColor::Green, false, "Freq".into()),
+                (125.0, TextColor::Green, true, "Points".into()),
+                (173.0, TextColor::Green, true, "Win".into()),
+                (221.0, TextColor::Green, true, "Lose".into()),
+                (269.0, TextColor::Green, true, "Flag".into()),
+            ];
+            let mut freqs: Vec<u16> = players.iter().filter(|p| p.ship < 8).map(|p| p.freq).collect();
+            freqs.sort();
+            freqs.dedup();
+            let rows = freqs
+                .into_iter()
+                .map(|f| {
+                    let team: Vec<_> = players.iter().filter(|p| p.ship < 8 && p.freq == f).collect();
+                    let sum = |g: &dyn Fn(&aicontinuum::net::session::Player) -> u32| team.iter().map(|p| g(p)).sum::<u32>();
+                    let c = color(f);
+                    Row {
+                        marker: (f == me.freq).then_some(0),
+                        runs: vec![
+                            (13.0, c, false, f.to_string()),
+                            (125.0, c, true, sum(&|p| points(p)).to_string()),
+                            (173.0, c, true, sum(&|p| p.wins as u32).to_string()),
+                            (221.0, c, true, sum(&|p| p.losses as u32).to_string()),
+                            (269.0, c, true, sum(&|p| p.flags_carried as u32).to_string()),
+                        ],
+                    }
+                })
+                .collect();
+            (268.0, header, rows)
+        }
+        _ => {
+            let header = vec![(49.0, TextColor::Green, false, count.clone())];
+            let rows = players
+                .iter()
+                .map(|p| Row { marker: marker(p), runs: vec![(13.0, color(p.freq), false, name(p))] })
+                .collect();
+            (108.0, header, rows)
+        }
+    };
+
+    let max_rows = ((screen_height() / 2.0 - 60.0) / 12.0).max(1.0) as usize;
+    let shown = rows.len().min(max_rows);
+    let h = 14.0 + 1.0 + shown as f32 * 12.0;
+    hud.swatch(ColorRow::Background, 3.0, 3.0, w, h);
+    let draw_run = |(x, c, right, text): &(f32, TextColor, bool, String), y: f32| {
+        let x = if *right { x - text.len() as f32 * FONT_W } else if *x == 49.0 { 49.0 - text.len() as f32 * FONT_W / 2.0 } else { *x };
+        hud.text(text, *c, x, y);
+    };
+    for run in &header {
+        draw_run(run, 4.0);
+    }
     hud.swatch(ColorRow::Border1, 3.0, 16.0, w, 1.0);
-    for (i, p) in players.iter().take(rows).enumerate() {
+    for (i, row) in rows.iter().take(shown).enumerate() {
         let y = 18.0 + i as f32 * 12.0;
-        let selected = p.pid == me.pid;
-        let marker = match (selected, p.ship >= 8) {
-            (true, false) => Some(0),
-            (false, true) => Some(1),
-            (true, true) => Some(2),
-            _ => None,
-        };
-        if let Some(m) = marker {
+        if let Some(m) = row.marker {
             blit(&hud.spectate, Rect::new(m as f32 * 8.0, 0.0, 8.0, 8.0), 3.0, y + 3.0);
         }
-        let color = if p.freq == me.freq { TextColor::Yellow } else { TextColor::White };
-        let name: String = p.name.chars().take(12).collect();
-        hud.text(&name, color, 13.0, y);
+        for run in &row.runs {
+            draw_run(run, y);
+        }
     }
     // Same three-ring bevel as the menu, around (3,3)-(3+w,3+h).
     let (x0, x1, y0, y1) = (0.0, 3.0 + w + 2.0, 0.0, 3.0 + h + 2.0);

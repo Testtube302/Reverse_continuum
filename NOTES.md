@@ -62,6 +62,15 @@
       warp, and the right icon column with all four on matches (4 px = stars). The original
       draws its own cloaked ship normally. Rig arena: [Warbird] Stealth/Cloak/XRadar/AntiWarp
       Status=2. tools/ref-rig/shot2.sh grabs both screens at once.
+      Round 16: EMP shutdown (EBombShutdownTime @1322 x damage / full EMP bomb damage; damage
+      scaled by EBombDamagePercent @1324; no recharge meanwhile; spark.png every 15 ticks; not in
+      safe zones) — seen working on the rig. Scores: kill/flag points + wins/losses from 0x03
+      records (@43/@47/@55/@57), S2C 0x09 updates, deaths count. F2 cycles six views measured
+      from the original (then hides): names (108 wide), Points / Point Sort / Team Sort (172
+      wide, values right-aligned to x=173; team headers "%04d" + 13 dashes in DarkRed, count
+      right-aligned to 165), W/L view (380 wide: Squad@133, W/L/R right edges 253/293/333, Ave
+      "x.y" to 381), team totals (268 wide: Freq, Points/Win/Lose/Flag right edges 125/173/221/269).
+      Headers pixel-identical; R (rating) formula unknown — shows 0; Ave = points per kill (guess).
       NOT yet: 
       cloak/xradar/antiwarp effects, EMP shutdown, arena spawn settings, attach/turrets,
       flags/balls, score packets.
@@ -207,7 +216,7 @@
 - Rig helpers: tools/ref-rig/rx.sh (run in container, optional screenshot → ~/aicontinuum-ref/shots;
   C=aic-wine5 to target the original's container) and crop.sh. Start: `docker start aic-ref aic-wine5`,
   clear /tmp/.X99-lock, start Xvfb :99 x16, zone-restart.sh, then join5.sh in aic-wine5.
-- Next: EMP shutdown, attach/turrets, balls, scores.
+- Next: attach/turrets, balls; then the zone VM (ask Ryan first) and integration.
 - Rig arena gives Warbirds 2 of every item (InitialRepel..InitialPortal).
 - The rig's centre safe zone has wall pieces: bots chasing the original get stuck behind them.
   Move the original into open space first (Up 1.2 s, wait, Down 1.2 s).
