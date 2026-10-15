@@ -177,6 +177,7 @@ struct Graphics {
     empburst: Sheet,
     warp: Sheet,
     exhaust: Sheet,
+    trail: Sheet,
     /// Ship debris, one sheet per ship type: 9 pieces (rows) x 10 rotations.
     junk: Vec<Sheet>,
     prizes: Sheet,
@@ -203,6 +204,7 @@ impl Graphics {
             empburst: Sheet::load(assets, "empburst", 80, 80),
             warp: Sheet::load(assets, "warp", 48, 48),
             exhaust: Sheet::load(assets, "exhaust", 16, 16),
+            trail: Sheet::load(assets, "trail", 16, 16),
             junk: ["wb", "jv", "sp", "lv", "te", "we", "nw", "sh"]
                 .iter()
                 .map(|s| Sheet::load(assets, &format!("junk{s}"), 16, 16))
@@ -676,6 +678,11 @@ fn draw_world(game: &Game, tiles: &Tiles, gfx: &Graphics, hud: &mut hud::Hud) {
         let (x, y) = to_screen(e.position);
         let row = if e.afterburner { 19 } else { 0 };
         gfx.exhaust.draw_centered(row + e.frame(), x, y);
+    }
+
+    for p in &game.bomb_puffs {
+        let (x, y) = to_screen(p.position);
+        gfx.trail.draw_centered(p.row as u32 * 10 + p.frame(), x, y);
     }
 
     for t in &game.trails {

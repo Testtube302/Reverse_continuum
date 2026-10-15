@@ -101,6 +101,13 @@
       Flag carriers: "name(bounty:flags)[ping]" in DarkRed for enemies (seen: Terr(70:2)[10]);
       implemented, but the side-by-side check is still open — examples/bot `flags` mode didn't
       pick a flag up (steering needs work). Team carriers' colour unknown (kept yellow).
+      Round 10: flag-carrier label CONFIRMED side by side: "Flagger9(82:3)[..]" DarkRed with
+      identical glyphs in both clients. examples/bot `flags` now uses a seek controller (desired
+      velocity toward the flag, slowing on approach) and collects 3 flags in ~12 s.
+      Bomb trails: a trail.png puff every 5 ticks at the bomb, 10 frames at ~28 ms; row = bomb
+      level (orange row seen for the Weasel's EMP bomb, so L2 = orange assumed; L1 red etc.
+      unconfirmed), grey row for thors. Checked offline only — the Weasel bot got stuck behind
+      the safe-zone walls on the side-by-side run. Weasel bombs are EMP (purple burst).
       TODO: name-tag toggles, LED rows 1-2 meaning (currently 0),
       bg sparkle objects (bg01-14), door animation, flags, LVZ, in-ship full-screen diff with
       matched state (original's ship had multiprize upgrades), Windows clock offset (uses `date`).
@@ -140,8 +147,10 @@
 - Rig helpers: tools/ref-rig/rx.sh (run in container, optional screenshot → ~/aicontinuum-ref/shots;
   C=aic-wine5 to target the original's container) and crop.sh. Start: `docker start aic-ref aic-wine5`,
   clear /tmp/.X99-lock, start Xvfb :99 x16, zone-restart.sh, then join5.sh in aic-wine5.
-- Next round planned: confirm flag-carrier labels side by side (fix bot `flags` steering),
-  bomb trails (trail.png), afterburner/remote exhaust, whole-screen in-ship diff.
+- Next round planned: confirm bomb-trail rows side by side, afterburner/remote exhaust,
+  name-tag toggles, bg sparkles, then whole-screen in-ship diff.
+- The rig's centre safe zone has wall pieces: bots chasing the original get stuck behind them.
+  Move the original into open space first (Up 1.2 s, wait, Down 1.2 s).
 - After a help capture the original is left with an F1 page open: press F1 until it closes.
 
 ## Original Continuum under Wine

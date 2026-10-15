@@ -47,6 +47,11 @@ pub const EXHAUST_TICKS: u32 = 53;
 const EXHAUST_SPEED_PX: f32 = 135.0;
 const EXHAUST_DRAG: f32 = 0.975;
 
+/// Bombs leave a puff from trail.png every 5 ticks; each plays its row's 10 frames at ~28 ms
+/// (measured from the original). Row = bomb level (red, yellow, blue, purple), grey for thors.
+pub const BOMB_TRAIL_INTERVAL_TICKS: u32 = 5;
+pub const BOMB_TRAIL_TICKS: u32 = 28;
+
 /// Ticks a trail dot lasts.
 pub const TRAIL_TICKS: u32 = 13;
 /// How long centre-screen messages stay up (measured from the original: ~4 s).
@@ -140,6 +145,21 @@ impl Exhaust {
     }
 }
 
+/// One puff of a bomb's trail.
+#[derive(Clone, Copy, Debug)]
+pub struct BombPuff {
+    pub position: Vec2,
+    /// Row of trail.png.
+    pub row: u8,
+    pub age: u32,
+}
+
+impl BombPuff {
+    pub fn frame(&self) -> u32 {
+        (self.age * 10 / 28).min(9)
+    }
+}
+
 /// A centre-screen message: arena enter/leave lines and kill messages.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CenterMessage {
@@ -171,6 +191,7 @@ pub struct Game {
     pub debris: Vec<Debris>,
     pub trails: Vec<TrailDot>,
     pub exhaust: Vec<Exhaust>,
+    pub bomb_puffs: Vec<BombPuff>,
     thrust_ticks: u32,
     pub sounds: Vec<SoundCue>,
     pub notices: Vec<String>,
@@ -219,6 +240,7 @@ impl Game {
             debris: Vec::new(),
             trails: Vec::new(),
             exhaust: Vec::new(),
+            bomb_puffs: Vec::new(),
             thrust_ticks: 0,
             sounds: Vec::new(),
             notices: Vec::new(),
@@ -541,6 +563,20 @@ impl Game {
         }
         self.exhaust.retain(|e| e.age < EXHAUST_TICKS);
         self.trails.retain(|t| t.age < TRAIL_TICKS);
+        for p in &mut self.bomb_puffs {
+            p.age += 1;
+        }
+        self.bomb_puffs.retain(|p| p.age < BOMB_TRAIL_TICKS);
+        for w in &self.weapons.list {
+            let row = match w.data.kind() {
+                WeaponKind::Bomb | WeaponKind::ProximityBomb if !w.data.alternate() => Some(w.data.level().min(3) as u8),
+                WeaponKind::Thor => Some(4),
+                _ => None,
+            };
+            if let (Some(row), 0) = (row, w.age % BOMB_TRAIL_INTERVAL_TICKS) {
+                self.bomb_puffs.push(BombPuff { position: w.position, row, age: 0 });
+            }
+        }
         for w in &self.weapons.list {
             if !matches!(w.data.kind(), WeaponKind::Bullet | WeaponKind::BouncingBullet) || w.age % TRAIL_INTERVAL_TICKS != 0 {
                 continue;

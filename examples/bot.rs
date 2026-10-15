@@ -73,6 +73,10 @@ fn main() {
         if let (Some(target), true) = (&chase, Instant::now() >= next_report) {
             next_report += Duration::from_secs(2);
             report_chase(&game, target);
+            if want_flags {
+                let o = game.ship.as_ref().map(|s| (s.orientation, s.velocity.x, s.velocity.y));
+                println!("flag input {:?} ship (orient, vx, vy) {o:?}", flag_input(&game));
+            }
         }
         let flag_input = if want_flags { flag_input(&game) } else { None };
         let input = match (&chase, flag_input.or_else(|| chase_input(&game, chase.as_deref(), dist))) {
@@ -128,6 +132,13 @@ fn report_chase(game: &Game, target: &str) {
         ),
         None => println!("chase: me {me:?}, no player named {target}"),
     }
+    let dropped: Vec<_> = s.flags.values().filter(|f| f.dropped).map(|f| (f.id, f.x, f.y)).collect();
+    println!(
+        "flags: known {} dropped {:?} carrying {}",
+        s.flags.len(),
+        &dropped[..dropped.len().min(4)],
+        s.me().map_or(0, |m| m.flags_carried)
+    );
 }
 
 /// Steering toward the nearest dropped flag, while there is one and we carry fewer than 3.
@@ -145,14 +156,19 @@ fn flag_input(game: &Game) -> Option<Input> {
         d(a).total_cmp(&d(b))
     })?;
     let (dx, dy) = (near.x as f32 + 0.5 - ship.position.x, near.y as f32 + 0.5 - ship.position.y);
-    let want = (dx.atan2(-dy) / std::f32::consts::TAU).rem_euclid(1.0);
+    // Seek: wanted velocity points at the flag and slows on approach; steer to close the gap
+    // between it and our velocity (velocity is in tiles/s).
+    let dist = (dx * dx + dy * dy).sqrt().max(0.01);
+    let speed = (dist * 1.2).min(6.0);
+    let (ex, ey) = (dx / dist * speed - ship.velocity.x, dy / dist * speed - ship.velocity.y);
+    let err = (ex * ex + ey * ey).sqrt();
+    let want = (ex.atan2(-ey) / std::f32::consts::TAU).rem_euclid(1.0);
     let diff = (want - ship.orientation + 1.5).rem_euclid(1.0) - 0.5;
-    let speed = (ship.velocity.x * ship.velocity.x + ship.velocity.y * ship.velocity.y).sqrt();
     Some(Input {
-        right: diff > 0.01,
-        left: diff < -0.01,
-        forward: diff.abs() < 0.1 && speed < 6.0,
-        backward: diff.abs() > 0.3 && speed > 2.0,
+        right: diff > 0.01 && diff < 0.45,
+        left: diff < -0.01 && diff > -0.45,
+        forward: err > 0.3 && diff.abs() < 0.12,
+        backward: err > 0.3 && diff.abs() > 0.38,
         ..Default::default()
     })
 }
