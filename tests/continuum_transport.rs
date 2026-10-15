@@ -465,3 +465,40 @@ fn large_encrypted_download_crosses_multiple_ack_windows() {
         }
     }
 }
+
+#[test]
+fn delayed_download_recovers_lost_chunk_and_deduplicates_retransmission() {
+    let (mut client, server, addr) = pair(|_| Some([0; 20]));
+    let cipher = reference_cipher();
+    server.send_to(&RESPONSE, addr).unwrap();
+    settle(&mut client);
+    assert_eq!(receive(&server), ACK);
+    server.send_to(&cipher.encrypt(&[0, 2]).unwrap(), addr).unwrap();
+    assert_eq!(settle(&mut client), vec![Event::Connected]);
+    receive(&server);
+    let mut whole = vec![0x55; 1440];
+    whole[0] = 0x2a;
+    let send = |id: u32| {
+        let mut packet = vec![0, 3];
+        packet.extend_from_slice(&id.to_le_bytes());
+        packet.extend_from_slice(&[0, 0x0a]);
+        packet.extend_from_slice(&(whole.len() as u32).to_le_bytes());
+        packet.extend_from_slice(&whole[id as usize * 480..(id as usize + 1) * 480]);
+        server.send_to(&cipher.encrypt(&packet).unwrap(), addr).unwrap();
+    };
+    // First chunk is lost; later chunks must be acknowledged but not delivered.
+    for id in [1, 2, 1] { send(id); }
+    assert!(settle(&mut client).is_empty());
+    let ack = cipher.decrypt(&receive(&server)).unwrap();
+    let ids: Vec<_> = ack[2..].chunks_exact(7)
+        .map(|p| u32::from_le_bytes(p[3..7].try_into().unwrap())).collect();
+    assert_eq!(ids, vec![1, 2, 1]);
+    std::thread::sleep(Duration::from_millis(600));
+    assert!(client.poll().is_empty());
+    send(0); // server retransmits the missing chunk
+    assert_eq!(settle(&mut client), vec![Event::Packet(whole.clone())]);
+    assert_eq!(cipher.decrypt(&receive(&server)).unwrap(), vec![0, 4, 0, 0, 0, 0]);
+    send(0); // lost acknowledgement causes a duplicate retransmission
+    assert!(settle(&mut client).is_empty());
+    assert_eq!(cipher.decrypt(&receive(&server)).unwrap(), vec![0, 4, 0, 0, 0, 0]);
+}

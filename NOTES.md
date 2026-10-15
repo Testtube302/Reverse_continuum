@@ -468,3 +468,15 @@
   explanation of its disconnect, not a confirmed public-server fix. No public
   login was initiated. The isolated reference containers were inspected read-only;
   no new original-client packet capture was performed in this follow-up.
+
+- Added opt-in AICONTINUUM_TRACE=1 transport metadata tracing for the unresolved
+  Trench Wars disconnect. Includes monotonic elapsed milliseconds, receive/send
+  sizes and socket results, decoded core/game types, nested reliable/cluster types,
+  reliable IDs, huge-transfer totals/progress, and rejected cipher packets after
+  the previous 32-packet logging limit. Never formats payloads, seeds, or keys.
+  Trace is capped at 8,192 events per connection, with an explicit cap marker;
+  nested metadata formatting is bounded to eight levels. Unit tests check credential
+  and seed exclusion. Added delayed/lost-chunk recovery and duplicate retransmission
+  coverage; 84 unit tests and 12 synthetic UDP tests pass (one unit test ignored).
+  Real-server integration tests remain opt-in. Desktop launcher enables the trace;
+  no public-server login initiated and no new disconnect fix claimed.

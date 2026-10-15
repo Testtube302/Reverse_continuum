@@ -109,3 +109,19 @@ in the CLI path; the executable checksum remains zero. Strict servers may reject
 > reference adapter as an experimental dependency, not completed standalone Rust
 > encryption. Preserve existing user changes, do not upload original-code images,
 > and keep network verification local. Report what is ready to merge and what remains.
+
+### Connection trace for the unresolved public-zone disconnect
+
+Set `AICONTINUUM_TRACE=1` to write `[NetTrace +Nms]` metadata to stderr.
+The desktop Play launcher enables this and appends stderr to
+`connection-diagnostics.log`. Capture covers acknowledgement IDs, nested packet
+kinds, send results, cipher rejections and map-transfer progress, without raw
+payloads, credentials or key material. It stops at 8,192 events per connection
+and prints a limit marker; nested metadata is limited to eight levels.
+The older session diagnostics also retain recent server arena/warning/error text.
+
+Owner-run Trench Wars attempts still accept login and begin map transfer before
+an unexplained core disconnect. The indexed map request and padded expansion
+challenge corrections did not resolve the observed attempt. Do not infer a
+confirmed cause from passing synthetic tests. Use the next owner-run trace to
+identify the actual divergence before changing protocol behavior again.
