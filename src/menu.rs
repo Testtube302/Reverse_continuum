@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use aicontinuum::assets::AssetDir;
 use aicontinuum::launcher::{self, Action, Canvas, Launcher, Profile, Zone};
+use aicontinuum::keys::{self, Key};
 use aicontinuum::skin::Skin;
 use macroquad::prelude::*;
 
@@ -64,6 +65,12 @@ impl MenuScreen {
         let mut launcher = Launcher::new(skin, extra, tips, spectate, ships, font, templates, profile, zones);
         launcher.select_skin_from_profile();
         launcher.data_dir = Some(assets.path(""));
+        if let Ok(b) = assets.read("keyboard.dat") {
+            launcher.keysets = keys::parse_keysets(&String::from_utf8_lossy(&b));
+        }
+        if let Ok(b) = assets.read("macro.dat") {
+            launcher.macrosets = keys::parse_macros(&String::from_utf8_lossy(&b));
+        }
         let (w, h) = launcher.size();
         let canvas = Canvas::new(w, h);
         let texture = Texture2D::from_rgba8(w as u16, h as u16, &canvas.px);
@@ -72,6 +79,11 @@ impl MenuScreen {
     }
 
     fn save(&mut self) {
+        if self.launcher.sets_dirty {
+            self.launcher.sets_dirty = false;
+            let _ = std::fs::write(self.assets_root.join("keyboard.dat"), keys::write_keysets(&self.launcher.keysets));
+            let _ = std::fs::write(self.assets_root.join("macro.dat"), keys::write_macros(&self.launcher.macrosets));
+        }
         if !self.launcher.dirty {
             return;
         }
@@ -138,6 +150,17 @@ impl MenuScreen {
             home: is_key_pressed(KeyCode::Home),
             end: is_key_pressed(KeyCode::End),
             alt_f4: (is_key_down(KeyCode::LeftAlt) || is_key_down(KeyCode::RightAlt)) && is_key_pressed(KeyCode::F4),
+            key: get_last_key_pressed().and_then(key_of),
+            right_pressed: is_mouse_button_pressed(MouseButton::Right),
+            mods: [
+                (Key::Shift, [KeyCode::LeftShift, KeyCode::RightShift]),
+                (Key::Ctrl, [KeyCode::LeftControl, KeyCode::RightControl]),
+                (Key::Alt, [KeyCode::LeftAlt, KeyCode::RightAlt]),
+            ]
+            .iter()
+            .filter(|(_, codes)| codes.iter().any(|c| is_key_down(*c)))
+            .map(|(k, _)| *k)
+            .collect(),
         }
     }
 
@@ -170,7 +193,12 @@ impl MenuScreen {
                     '\t' => input.tab = true,
                     '\n' => input.enter = true,
                     '\u{8}' => input.backspace = true,
-                    c => input.chars.push(c),
+                    c => {
+                        input.chars.push(c);
+                        if c.is_ascii_alphanumeric() {
+                            input.key = Some(Key::Char(c.to_ascii_uppercase()));
+                        }
+                    }
                 }
             }
             let mut action = self.launcher.update(&input);
@@ -225,4 +253,46 @@ fn open_url(url: &str) {
     if let Err(e) = r {
         eprintln!("could not open {url}: {e}");
     }
+}
+
+/// A non-modifier key as keyboard.dat names it.
+fn key_of(k: KeyCode) -> Option<Key> {
+    use KeyCode as K;
+    Some(match k {
+        K::Left => Key::Left,
+        K::Right => Key::Right,
+        K::Up => Key::Up,
+        K::Down => Key::Down,
+        K::Tab => Key::Tab,
+        K::Space => Key::Space,
+        K::Enter | K::KpEnter => Key::Enter,
+        K::Backspace => Key::Backspace,
+        K::Insert => Key::Insert,
+        K::Delete => Key::Delete,
+        K::Home => Key::Home,
+        K::End => Key::End,
+        K::PageUp => Key::PgUp,
+        K::PageDown => Key::PgDown,
+        K::F1 => Key::F(1),
+        K::F2 => Key::F(2),
+        K::F3 => Key::F(3),
+        K::F4 => Key::F(4),
+        K::F5 => Key::F(5),
+        K::F6 => Key::F(6),
+        K::F7 => Key::F(7),
+        K::F8 => Key::F(8),
+        K::F9 => Key::F(9),
+        K::F10 => Key::F(10),
+        K::F11 => Key::F(11),
+        K::F12 => Key::F(12),
+        other => {
+            let name = format!("{other:?}");
+            let c = match name.as_str() {
+                n if n.len() == 1 => n.chars().next()?,
+                n if n.starts_with("Key") && n.len() == 4 => n.chars().nth(3)?,
+                _ => return None,
+            };
+            Key::Char(c)
+        }
+    })
 }

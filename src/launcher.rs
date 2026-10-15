@@ -12,7 +12,8 @@ use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
 use std::time::{Duration, Instant};
 
 use crate::assets::RgbaImage;
-use crate::dialog::{Dialog, Event, IDCANCEL, IDOK, Item, Template};
+use crate::dialog::{Dialog, Event, IDCANCEL, IDOK, Item, Look, Template};
+use crate::keys::{self, Binding, Key, KeySet, MacroSet};
 use crate::menubar::{self, Cmd};
 use crate::skin::{Hotspot, Rect, Skin, Step};
 use crate::winfont::{BitmapFont, TAHOMA_8};
@@ -602,11 +603,26 @@ pub struct Input {
     pub home: bool,
     pub end: bool,
     pub alt_f4: bool,
+    /// For key capture: a non-modifier key pressed this frame, and the modifiers held.
+    pub key: Option<Key>,
+    pub mods: Vec<Key>,
+    pub right_pressed: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
-    Play { addr: SocketAddr, zone: String, name: String, password: String, ship: u8, fullscreen: bool, resolution: (u16, u16) },
+    Play {
+        addr: SocketAddr,
+        zone: String,
+        name: String,
+        password: String,
+        ship: u8,
+        fullscreen: bool,
+        resolution: (u16, u16),
+        /// Key definition and macro set names.
+        keys: String,
+        macros: String,
+    },
     Quit,
     /// Open a web page.
     Url(String),
@@ -648,6 +664,25 @@ const PROF_DELETE: i32 = 1029;
 const PASS_EDIT: i32 = 1023;
 const PASS_SAVE: i32 = 1201;
 const TIP_TEXT: i32 = 1227;
+const DLG_KEYS: u32 = 122;
+const KEYS_LIST: i32 = 1064;
+const KEYS_NAME: i32 = 1065;
+const KEYS_DEFAULTS: i32 = 1031;
+const KEYS_REQ_MSG: i32 = 1236;
+const KEYS_JOYSTICK: i32 = 1237;
+const KEYS_CONFLICT: i32 = 1199;
+const KEYS_HELP: i32 = 1067;
+const KEYS_HELP_TEXT: &str = "\nType the key sequence.\n\nIt can contain up to 3 keys. Every key but the last one must be Alt, Ctrl, or Shift. The last key may be any key. Press ESC to cancel. Right click on a button to remove its key mapping.";
+const DLG_MACROS: u32 = 120;
+const MACROS_LIST: i32 = 1026;
+const MACROS_NAME: i32 = 1108;
+const MACROS_SHOW_KEYS: i32 = 1088;
+/// Macro line edits 1..20 and the labels showing each macro's key.
+const MACRO_EDITS: std::ops::RangeInclusive<i32> = 1038..=1057;
+const MACRO_LABELS: [i32; 20] = [1090, 1091, 1092, 1093, 1094, 1095, 1096, 1097, 1098, 1099, 1100, 1101, 1102, 1103, 1104, 1105, 1106, 1107, 1109, 1110];
+const SET_NEW: i32 = 1028;
+const SET_COPY: i32 = 1030;
+const SET_DELETE: i32 = 1029;
 const DLG_CUSTOM: u32 = 176;
 const ZONES_ADD_CUSTOM: i32 = 1021;
 const CUSTOM_NAME: i32 = 1007;
@@ -683,6 +718,16 @@ enum Kind {
     Tip(usize),
     Trace(Trace),
     Proxy,
+    KeyDefs(KeyEdit),
+    Macros(Vec<MacroSet>, usize),
+}
+
+/// The key definitions being edited; `capture` is the button waiting for a key and the
+/// most modifiers held so far (a binding can be modifiers only, like "Shift Ctrl").
+struct KeyEdit {
+    sets: Vec<KeySet>,
+    cur: usize,
+    capture: Option<(i32, Vec<Key>)>,
 }
 
 /// The Trace dialog's live pings to one zone.
@@ -760,6 +805,10 @@ pub struct Launcher {
     tips: Vec<String>,
     /// Directory servers for the zones dialog.
     pub servers: String,
+    /// keyboard.dat and macro.dat; `sets_dirty` asks the frontend to save them.
+    pub keysets: Vec<KeySet>,
+    pub macrosets: Vec<MacroSet>,
+    pub sets_dirty: bool,
     /// Where Export writes files (the install folder).
     pub data_dir: Option<std::path::PathBuf>,
     /// Set whenever profile or zones change; the frontend saves and clears it.
@@ -801,6 +850,9 @@ impl Launcher {
             tips,
             servers: DEFAULT_DIRECTORY_SERVERS.into(),
             data_dir: None,
+            keysets: vec![KeySet::defaults("Default")],
+            macrosets: vec![MacroSet::empty("Default")],
+            sets_dirty: false,
             dirty: false,
         };
         let want = l.profiles[l.active].get("zone").to_string();
@@ -942,6 +994,8 @@ impl Launcher {
             }
             "profile" => self.open_profile(),
             "password" => self.open_password(),
+            "keydefs" => self.open_keydefs(),
+            "macros" => self.open_macros(),
             "profile-ship" => {
                 self.open_profile();
                 if let Some(c) = self.dialog.as_mut().and_then(|o| o.d.control_mut(PROF_SHIP)) {
@@ -990,7 +1044,7 @@ impl Launcher {
         let list = self.profiles.clone();
         let cur = self.active;
         refresh_profile_list(&mut d, &list, cur);
-        fill_profile_fields(&mut d, &list[cur], &self.zones);
+        fill_profile_fields(&mut d, &list[cur], &self.zones, &self.keysets, &self.macrosets);
         d.focus_id(PROF_LIST);
         self.dialog = Some(Open { kind: Kind::Profile(list, cur), d });
     }
@@ -1040,6 +1094,8 @@ impl Launcher {
             password,
             ship: self.profiles[self.active].ship(),
             fullscreen: self.profiles[self.active].get("windowed") != "1",
+            keys: Some(self.profiles[self.active].get("keyboard")).filter(|s| !s.is_empty()).unwrap_or("Default").to_string(),
+            macros: Some(self.profiles[self.active].get("macros")).filter(|s| !s.is_empty()).unwrap_or("Default").to_string(),
             resolution: self
                 .profiles[self.active]
                 .get("resolution")
@@ -1154,6 +1210,45 @@ impl Launcher {
                 refresh_zones(open);
             }
         }
+        // A key-definition button waiting for a key takes the keyboard.
+        if let Kind::KeyDefs(edit) = &mut open.kind {
+            if let Some((id, most)) = edit.capture.as_mut() {
+                let id = *id;
+                let done = if input.escape || input.left_pressed {
+                    Some(None)
+                } else if let Some(k) = input.key {
+                    let mut keys: Vec<Key> = input.mods.iter().copied().take(2).collect();
+                    keys.push(k);
+                    Some(Some(Binding::from_keys(keys)))
+                } else if input.mods.is_empty() && !most.is_empty() {
+                    // Modifiers alone, released: bind them.
+                    Some(Some(Binding::from_keys(most.clone())))
+                } else {
+                    if input.mods.len() > most.len() {
+                        *most = input.mods.clone();
+                    }
+                    None
+                };
+                if let Some(result) = done {
+                    if let (Some(b), Some((action, _))) = (result, keys::ACTIONS.iter().find(|(_, i)| *i == id)) {
+                        edit.sets[edit.cur].set(action, b);
+                    }
+                    edit.capture = None;
+                    show_keyset(&mut open.d, edit);
+                }
+                return None;
+            }
+        }
+        if let Kind::KeyDefs(edit) = &mut open.kind {
+            if input.right_pressed {
+                if let Some(id) = open.d.key_button_at(input.mouse) {
+                    if let Some((action, _)) = keys::ACTIONS.iter().find(|(_, i)| *i == id) {
+                        edit.sets[edit.cur].set(action, Binding::default());
+                        show_keyset(&mut open.d, edit);
+                    }
+                }
+            }
+        }
         let events = open.d.handle(input);
         let keep = self.selected_zone().map(|z| z.name);
         for ev in events {
@@ -1172,6 +1267,100 @@ impl Launcher {
                         t.lines.push(if ok { format!("Exported to {}", path.display()) } else { "Export failed.".into() });
                         t.last_send = None;
                     }
+                }
+                (Kind::KeyDefs(edit), Event::Command(IDOK)) => {
+                    read_keyset_fields(&open.d, edit);
+                    self.keysets = std::mem::take(&mut edit.sets);
+                    let name = self.keysets[edit.cur].name.clone();
+                    self.profiles[self.active].set("keyboard", &name);
+                    self.sets_dirty = true;
+                    self.dirty = true;
+                    self.dialog = None;
+                }
+                (Kind::KeyDefs(edit), Event::Select(KEYS_LIST, row)) => {
+                    read_keyset_fields(&open.d, edit);
+                    edit.cur = row.min(edit.sets.len() - 1);
+                    show_keyset(&mut open.d, edit);
+                }
+                (Kind::KeyDefs(edit), Event::Command(KEYS_JOYSTICK)) => {
+                    read_keyset_fields(&open.d, edit);
+                    show_keyset(&mut open.d, edit);
+                }
+                (Kind::KeyDefs(edit), Event::Command(id)) if keys::ACTIONS.iter().any(|(_, i)| *i == id) => {
+                    edit.capture = Some((id, Vec::new()));
+                    show_keyset(&mut open.d, edit);
+                }
+                (Kind::KeyDefs(edit), Event::Command(id @ (SET_NEW | SET_COPY | SET_DELETE | KEYS_DEFAULTS))) => {
+                    read_keyset_fields(&open.d, edit);
+                    let unique = |sets: &[KeySet], base: &str| {
+                        (1..).map(|n| if n == 1 { base.to_string() } else { format!("{base} {n}") }).find(|c| !sets.iter().any(|k| k.name == *c)).unwrap()
+                    };
+                    match id {
+                        SET_NEW => {
+                            let name = unique(&edit.sets, "New");
+                            edit.sets.insert(edit.cur + 1, KeySet::defaults(&name));
+                            edit.cur += 1;
+                        }
+                        SET_COPY => {
+                            let mut k = edit.sets[edit.cur].clone();
+                            k.name = unique(&edit.sets, &format!("Copy of {}", k.name));
+                            edit.sets.insert(edit.cur + 1, k);
+                            edit.cur += 1;
+                        }
+                        SET_DELETE if edit.sets.len() > 1 => {
+                            edit.sets.remove(edit.cur);
+                            edit.cur = edit.cur.min(edit.sets.len() - 1);
+                        }
+                        KEYS_DEFAULTS => {
+                            let name = edit.sets[edit.cur].name.clone();
+                            edit.sets[edit.cur] = KeySet::defaults(&name);
+                        }
+                        _ => {}
+                    }
+                    show_keyset(&mut open.d, edit);
+                }
+                (Kind::Macros(sets, cur), Event::Command(IDOK)) => {
+                    read_macro_fields(&open.d, &mut sets[*cur]);
+                    self.macrosets = std::mem::take(sets);
+                    let name = self.macrosets[*cur].name.clone();
+                    self.profiles[self.active].set("macros", &name);
+                    self.sets_dirty = true;
+                    self.dirty = true;
+                    self.dialog = None;
+                }
+                (Kind::Macros(sets, cur), Event::Select(MACROS_LIST, row)) => {
+                    read_macro_fields(&open.d, &mut sets[*cur]);
+                    *cur = row.min(sets.len() - 1);
+                    show_macroset(&mut open.d, sets, *cur, &self.keysets);
+                }
+                (Kind::Macros(sets, cur), Event::Select(MACROS_SHOW_KEYS, _)) => {
+                    read_macro_fields(&open.d, &mut sets[*cur]);
+                    show_macroset(&mut open.d, sets, *cur, &self.keysets);
+                }
+                (Kind::Macros(sets, cur), Event::Command(id @ (SET_NEW | SET_COPY | SET_DELETE))) => {
+                    read_macro_fields(&open.d, &mut sets[*cur]);
+                    let unique = |sets: &[MacroSet], base: &str| {
+                        (1..).map(|n| if n == 1 { base.to_string() } else { format!("{base} {n}") }).find(|c| !sets.iter().any(|m| m.name == *c)).unwrap()
+                    };
+                    match id {
+                        SET_NEW => {
+                            let name = unique(sets, "New");
+                            sets.insert(*cur + 1, MacroSet::empty(&name));
+                            *cur += 1;
+                        }
+                        SET_COPY => {
+                            let mut m = sets[*cur].clone();
+                            m.name = unique(sets, &format!("Copy of {}", m.name));
+                            sets.insert(*cur + 1, m);
+                            *cur += 1;
+                        }
+                        SET_DELETE if sets.len() > 1 => {
+                            sets.remove(*cur);
+                            *cur = (*cur).min(sets.len() - 1);
+                        }
+                        _ => {}
+                    }
+                    show_macroset(&mut open.d, sets, *cur, &self.keysets);
                 }
                 (Kind::Proxy, Event::Command(IDOK)) => {
                     let d = &open.d;
@@ -1215,7 +1404,7 @@ impl Launcher {
                 (Kind::Profile(list, cur), Event::Select(PROF_LIST, row)) => {
                     read_profile_fields(&open.d, &mut list[*cur]);
                     *cur = row.min(list.len() - 1);
-                    fill_profile_fields(&mut open.d, &list[*cur], &self.zones);
+                    fill_profile_fields(&mut open.d, &list[*cur], &self.zones, &self.keysets, &self.macrosets);
                     refresh_profile_list(&mut open.d, list, *cur);
                 }
                 (Kind::Profile(list, cur), Event::Command(id @ (PROF_NEW | PROF_COPY | PROF_DELETE | PROF_MOVE_UP | PROF_MOVE_DOWN))) => {
@@ -1250,7 +1439,7 @@ impl Launcher {
                         }
                         _ => {}
                     }
-                    fill_profile_fields(&mut open.d, &list[*cur], &self.zones);
+                    fill_profile_fields(&mut open.d, &list[*cur], &self.zones, &self.keysets, &self.macrosets);
                     refresh_profile_list(&mut open.d, list, *cur);
                 }
                 (Kind::Zones(z), Event::Command(IDOK)) => {
@@ -1499,8 +1688,8 @@ impl Launcher {
             Cmd::Quit => return Some(Action::Quit),
             Cmd::Profiles => self.open_profile(),
             Cmd::Zones => self.open_zones(),
-            Cmd::Macros => self.open_other(120),
-            Cmd::KeyDefs => self.open_other(122),
+            Cmd::Macros => self.open_macros(),
+            Cmd::KeyDefs => self.open_keydefs(),
             Cmd::Trace => self.open_trace(),
             Cmd::Options => self.open_other(159),
             Cmd::AdvancedOptions => self.open_other(113),
@@ -1591,6 +1780,42 @@ impl Launcher {
         }
     }
 
+    fn open_keydefs(&mut self) {
+        let Some(mut d) = self.new_dialog(DLG_KEYS) else { return };
+        let sets = self.keysets.clone();
+        let want = self.profiles[self.active].get("keyboard").to_string();
+        let cur = sets.iter().position(|k| k.name == want).unwrap_or(0);
+        for (_, id) in keys::ACTIONS {
+            if let Some(c) = d.control_mut(id) {
+                c.visible = true;
+                c.look = Look::KeyButton { capturing: false };
+            }
+        }
+        let mut edit = KeyEdit { sets, cur, capture: None };
+        show_keyset(&mut d, &edit);
+        d.focus_id(IDOK);
+        edit.capture = None;
+        self.dialog = Some(Open { kind: Kind::KeyDefs(edit), d });
+    }
+
+    fn open_macros(&mut self) {
+        let Some(mut d) = self.new_dialog(DLG_MACROS) else { return };
+        let sets = self.macrosets.clone();
+        let want = self.profiles[self.active].get("macros").to_string();
+        let cur = sets.iter().position(|m| m.name == want).unwrap_or(0);
+        for id in MACRO_EDITS {
+            if let Some(c) = d.control_mut(id) {
+                c.look = Look::MacroEdit;
+            }
+        }
+        let names: Vec<String> = self.keysets.iter().map(|k| k.name.clone()).collect();
+        let kw = self.profiles[self.active].get("keyboard").to_string();
+        set_combo(&mut d, MACROS_SHOW_KEYS, &names, names.iter().position(|n| *n == kw).unwrap_or(0));
+        show_macroset(&mut d, &sets, cur, &self.keysets);
+        d.focus_id(IDOK);
+        self.dialog = Some(Open { kind: Kind::Macros(sets, cur), d });
+    }
+
     fn open_trace(&mut self) {
         let Some(mut d) = self.new_dialog(DLG_TRACE) else { return };
         let zone = self.selected_zone();
@@ -1627,13 +1852,90 @@ impl Launcher {
     }
 }
 
+/// Shows a key set: list, name, each action button's binding, checkboxes and CONFLICT.
+fn show_keyset(d: &mut Dialog, e: &KeyEdit) {
+    if let Some(c) = d.control_mut(KEYS_LIST) {
+        c.items = e.sets.iter().map(|k| Item::text(&k.name)).collect();
+        c.sel = Some(e.cur);
+    }
+    let set = &e.sets[e.cur];
+    d.set_text(KEYS_NAME, &set.name);
+    for (action, id) in keys::ACTIONS {
+        if let Some(c) = d.control_mut(id) {
+            c.text = set.get(action).name();
+            c.look = Look::KeyButton { capturing: e.capture.as_ref().is_some_and(|(cid, _)| *cid == id) };
+        }
+    }
+    for (id, on) in [(KEYS_REQ_MSG, set.req_msg_key), (KEYS_JOYSTICK, set.joystick)] {
+        if let Some(c) = d.control_mut(id) {
+            c.checked = on;
+        }
+    }
+    // The original greys "Require Msg Key" unless a joystick is in use.
+    if let Some(c) = d.control_mut(KEYS_REQ_MSG) {
+        c.enabled = set.joystick;
+    }
+    let conflict = !set.conflicts().is_empty();
+    if let Some(c) = d.control_mut(KEYS_CONFLICT) {
+        c.visible = conflict;
+    }
+    // While a button waits for a key, the list and its label give way to instructions.
+    let capturing = e.capture.is_some();
+    d.set_text(KEYS_HELP, KEYS_HELP_TEXT);
+    for c in d.controls.iter_mut() {
+        if c.t.id == KEYS_HELP {
+            c.visible = capturing;
+        } else if c.t.id == KEYS_LIST || (c.t.id == -1 && c.t.text.starts_with("Key Definition")) {
+            c.visible = !capturing;
+        }
+    }
+}
+
+fn read_keyset_fields(d: &Dialog, e: &mut KeyEdit) {
+    let set = &mut e.sets[e.cur];
+    let name = d.text(KEYS_NAME).trim().to_string();
+    if !name.is_empty() {
+        set.name = name;
+    }
+    set.req_msg_key = d.checked(KEYS_REQ_MSG);
+    set.joystick = d.checked(KEYS_JOYSTICK);
+}
+
+/// Shows a macro set; the labels name each macro's key in the key set picked under "Show key".
+fn show_macroset(d: &mut Dialog, sets: &[MacroSet], cur: usize, keysets: &[KeySet]) {
+    if let Some(c) = d.control_mut(MACROS_LIST) {
+        c.items = sets.iter().map(|m| Item::text(&m.name)).collect();
+        c.sel = Some(cur);
+    }
+    d.set_text(MACROS_NAME, &sets[cur].name);
+    for (k, id) in MACRO_EDITS.enumerate() {
+        d.set_text(id, &sets[cur].lines[k]);
+    }
+    let shown = d.control(MACROS_SHOW_KEYS).and_then(|c| c.sel).unwrap_or(0);
+    if let Some(ks) = keysets.get(shown) {
+        for (k, id) in MACRO_LABELS.iter().enumerate() {
+            d.set_text(*id, &ks.get(&format!("Macro{}", k + 1)).name());
+        }
+    }
+}
+
+fn read_macro_fields(d: &Dialog, m: &mut MacroSet) {
+    let name = d.text(MACROS_NAME).trim().to_string();
+    if !name.is_empty() {
+        m.name = name;
+    }
+    for (k, id) in MACRO_EDITS.enumerate() {
+        m.lines[k] = d.text(id);
+    }
+}
+
 /// Profile names in the dialog's list, with Move Up/Down and Delete enabled when they apply.
 fn refresh_profile_list(d: &mut Dialog, list: &[Profile], cur: usize) {
     if let Some(c) = d.control_mut(PROF_LIST) {
         c.items = list.iter().map(|p| Item::text(p.get("profile"))).collect();
         c.sel = Some(cur);
     }
-    for (id, on) in [(PROF_MOVE_UP, cur > 0), (PROF_MOVE_DOWN, cur + 1 < list.len()), (PROF_DELETE, list.len() > 1)] {
+    for (id, on) in [(PROF_MOVE_UP, cur > 0), (PROF_MOVE_DOWN, cur + 1 < list.len())] {
         if let Some(c) = d.control_mut(id) {
             c.enabled = on;
         }
@@ -1656,7 +1958,7 @@ fn resolution_names() -> Vec<String> {
 }
 
 /// Shows one profile in the Edit Selected Profile fields.
-fn fill_profile_fields(d: &mut Dialog, p: &Profile, zones: &[Zone]) {
+fn fill_profile_fields(d: &mut Dialog, p: &Profile, zones: &[Zone], keysets: &[KeySet], macrosets: &[MacroSet]) {
     let or = |k: &str, default: &str| if p.get(k).is_empty() { default.to_string() } else { p.get(k).to_string() };
     d.set_text(PROF_NAME, &or("profile", "Default"));
     d.set_text(PROF_PLAYER, p.get("name"));
@@ -1672,8 +1974,10 @@ fn fill_profile_fields(d: &mut Dialog, p: &Profile, zones: &[Zone]) {
         std::iter::once("<default>".to_string()).chain(zones.iter().filter(|z| z.shown).map(|z| z.name.clone())).collect();
     let zsel = zone_names.iter().position(|n| n == p.get("zone")).unwrap_or(0);
     set_combo(d, PROF_ZONE, &zone_names, zsel);
-    set_combo(d, PROF_MACROS, &[or("macros", "Default")], 0);
-    set_combo(d, PROF_KEYS, &[or("keyboard", "Default")], 0);
+    let macro_names: Vec<String> = macrosets.iter().map(|m| m.name.clone()).collect();
+    set_combo(d, PROF_MACROS, &macro_names, macro_names.iter().position(|n| *n == or("macros", "Default")).unwrap_or(0));
+    let key_names: Vec<String> = keysets.iter().map(|k| k.name.clone()).collect();
+    set_combo(d, PROF_KEYS, &key_names, key_names.iter().position(|n| *n == or("keyboard", "Default")).unwrap_or(0));
     d.set_text(PROF_TARGET, p.get("target").trim_start_matches("-1"));
     d.set_text(PROF_CHATS, p.get("chat"));
     d.set_text(PROF_AUTO, p.get("auto"));
@@ -1701,6 +2005,12 @@ fn read_profile_fields(d: &Dialog, p: &mut Profile) {
     p.set("windowed", &sel(PROF_WINDOW).to_string());
     if let Some(z) = combo_text(d, PROF_ZONE) {
         p.set("zone", if z == "<default>" { "" } else { &z });
+    }
+    if let Some(m) = combo_text(d, PROF_MACROS) {
+        p.set("macros", &m);
+    }
+    if let Some(k) = combo_text(d, PROF_KEYS) {
+        p.set("keyboard", &k);
     }
     let target = d.text(PROF_TARGET);
     p.set("target", if target.is_empty() { "-1" } else { &target });

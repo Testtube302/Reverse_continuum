@@ -7,7 +7,7 @@
 
 use crate::launcher::{Canvas, Input};
 use crate::skin::Rect;
-use crate::winfont::{BitmapFont, MS_SANS_SERIF_8, TAHOMA_8_BOLD};
+use crate::winfont::{BitmapFont, COURIER_15, MS_SANS_SERIF_8, TAHOMA_8_BOLD};
 
 pub const FACE: [u8; 3] = [212, 208, 200];
 pub const HILIGHT: [u8; 3] = [255, 255, 255];
@@ -26,6 +26,12 @@ const CHECK_SIZE: i32 = 13;
 const SCROLL_W: i32 = 16;
 
 pub const IDOK: i32 = 1;
+
+/// Text carets blink like Windows' default (530 ms on, 530 ms off).
+fn caret_on() -> bool {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    START.get_or_init(std::time::Instant::now).elapsed().as_millis() / 530 % 2 == 0
+}
 pub const IDCANCEL: i32 = 2;
 
 const WS_VISIBLE: u32 = 0x1000_0000;
@@ -215,6 +221,7 @@ pub struct Control {
     /// Combo box: list dropped down, and the row under the mouse.
     pub dropped: bool,
     pub hot: Option<usize>,
+    pub look: Look,
 }
 
 impl Control {
@@ -240,6 +247,20 @@ impl Control {
     }
 }
 
+/// Controls Continuum draws itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Look {
+    Normal,
+    /// A key-definition button; black while waiting for a key.
+    KeyButton { capturing: bool },
+    /// A macro line: black edit, lavender Courier text.
+    MacroEdit,
+}
+
+const SILVER: [u8; 3] = [192, 192, 192];
+const MACRO_TEXT: [u8; 3] = [160, 160, 255];
+const WS_EX_STATICEDGE_STATIC: u32 = 0x2_0000;
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
     /// A push button was clicked (or Enter / Esc for IDOK / IDCANCEL), or a checkbox toggled.
@@ -257,6 +278,7 @@ pub struct Dialog {
     pub focus: Option<usize>,
     font: BitmapFont,
     caption_font: BitmapFont,
+    mono: BitmapFont,
     last_click: Option<(std::time::Instant, i32, usize)>,
 }
 
@@ -295,6 +317,7 @@ impl Dialog {
                     bold: Vec::new(),
                     dropped: false,
                     hot: None,
+                    look: Look::Normal,
                     t: c.clone(),
                 }
             })
@@ -307,6 +330,7 @@ impl Dialog {
             focus: None,
             font,
             caption_font,
+            mono: BitmapFont::parse(COURIER_15).expect("built-in font"),
             last_click: None,
         };
         d.focus = d.controls.iter().position(|c| c.focusable());
@@ -481,7 +505,8 @@ impl Dialog {
             if c.t.class == Class::Edit && c.t.style & 0x800 == 0 {
                 for &ch in &input.chars {
                     let ok = if c.t.style & ES_NUMBER != 0 { ch.is_ascii_digit() } else { (' '..='~').contains(&ch) };
-                    if ok && c.text.len() < 63 {
+                    let max = if c.look == Look::MacroEdit { 200 } else { 63 };
+                    if ok && c.text.len() < max {
                         c.text.push(ch);
                     }
                 }
@@ -501,6 +526,15 @@ impl Dialog {
             out.push(Event::Command(IDCANCEL));
         }
         out
+    }
+
+    /// The key-definition button under a window point.
+    pub fn key_button_at(&self, p: (i32, i32)) -> Option<i32> {
+        let (ox, oy) = self.client_origin();
+        self.controls
+            .iter()
+            .find(|c| c.visible && matches!(c.look, Look::KeyButton { .. }) && c.rect.contains(p.0 - ox, p.1 - oy))
+            .map(|c| c.t.id)
     }
 
     fn close_box(&self) -> Rect {
@@ -545,9 +579,12 @@ impl Dialog {
             }
         }
         let (ox, oy) = self.client_origin();
+        // A focused push button takes the default button's black border, as in Windows.
+        // (Continuum's own key buttons don't.)
+        let push_focused = self.focus.and_then(|i| self.controls.get(i)).is_some_and(|c| c.is_button_kind(0) && c.look == Look::Normal);
         for (i, ctl) in self.controls.iter().enumerate() {
             if ctl.visible {
-                self.draw_control(c, ctl, ox, oy, self.focus == Some(i));
+                self.draw_control(c, ctl, ox, oy, self.focus == Some(i), push_focused);
             }
         }
         if let Some(ctl) = self.controls.iter().find(|c| c.dropped) {
@@ -612,9 +649,39 @@ impl Dialog {
         }
     }
 
-    fn draw_control(&self, c: &mut Canvas, ctl: &Control, ox: i32, oy: i32, focused: bool) {
+    fn draw_control(&self, c: &mut Canvas, ctl: &Control, ox: i32, oy: i32, focused: bool, push_focused: bool) {
         let r = Rect { x0: ctl.rect.x0 + ox, y0: ctl.rect.y0 + oy, x1: ctl.rect.x1 + ox, y1: ctl.rect.y1 + oy };
         let fh = self.font.height;
+        match ctl.look {
+            Look::KeyButton { capturing } => {
+                // Silver line, black-framed box (grey, or black while capturing), silver below.
+                c.fill(r.x0, r.y0, r.w() - 1, 1, SILVER);
+                let b = Rect { x0: r.x0, y0: r.y0 + 1, x1: r.x1, y1: r.y0 + 16 };
+                c.fill(b.x0, b.y0, b.w(), b.h(), TEXT);
+                if !capturing {
+                    c.fill(b.x0 + 1, b.y0 + 1, b.w() - 2, b.h() - 2, SHADOW);
+                }
+                c.fill(r.x0, r.y0 + 17, r.w() - 1, 2, SILVER);
+                let w = self.font.width(&ctl.text);
+                let col = if capturing { SHADOW } else { HILIGHT };
+                c.clip = Some((b.x0 + 1, b.y0 + 1, b.x1 - 1, b.y1 - 1));
+                self.text_line(c, &ctl.text, b.x0 + (b.w() - w + 1) / 2, b.y0 + (b.h() - fh) / 2 + 1, col, false);
+                c.clip = None;
+                return;
+            }
+            Look::MacroEdit => {
+                c.fill(r.x0, r.y0, r.w(), r.h(), TEXT);
+                edge(c, r, SHADOW, HILIGHT, DKSHADOW, LIGHT);
+                c.clip = Some((r.x0 + 2, r.y0 + 2, r.x1 - 2, r.y1 - 2));
+                let end = self.mono.draw(&ctl.text, r.x0 + 7, r.y0 + 3, |x, y| c.put(x, y, MACRO_TEXT));
+                if focused && caret_on() {
+                    c.fill(end, r.y0 + 3, 1, 14, MACRO_TEXT);
+                }
+                c.clip = None;
+                return;
+            }
+            Look::Normal => {}
+        }
         match &ctl.t.class {
             Class::Button if ctl.is_button_kind(7) => {
                 // Group box: etched frame from mid-text height, label over it.
@@ -657,7 +724,7 @@ impl Dialog {
                     c.fill(b.x1, b.y0, 1, b.h(), HILIGHT);
                     b = inset(b, 1);
                 }
-                if ctl.is_button_kind(1) || (focused && ctl.is_push()) {
+                if (ctl.is_button_kind(1) && !push_focused) || (focused && ctl.is_push()) {
                     outline(c, b, TEXT);
                     b = inset(b, 1);
                 }
@@ -665,7 +732,9 @@ impl Dialog {
                 edge(c, b, HILIGHT, DKSHADOW, LIGHT, SHADOW);
                 let w = self.text_width(&ctl.text, true);
                 let tx = if ctl.t.style & BS_LEFT != 0 { r.x0 + 2 } else { r.x0 + (r.w() - w) / 2 };
-                let ty = r.y0 + (r.h() - fh + 1) / 2;
+                // Measured: centred with (h - 13) / 2, one lower inside a static edge.
+                let edge_shift = (ctl.t.ex_style & WS_EX_STATICEDGE != 0) as i32;
+                let ty = r.y0 + (r.h() - fh) / 2 + edge_shift;
                 self.label(c, &ctl.text, tx, ty, ctl.enabled);
                 if focused {
                     focus_rect(c, inset(b, 2));
@@ -685,15 +754,24 @@ impl Dialog {
                 } else {
                     self.text_line(c, &shown, tx, ty, TEXT, false);
                 }
-                if focused && ctl.t.style & ES_MULTILINE == 0 && ctl.t.style & 0x800 == 0 {
+                if focused && caret_on() && ctl.t.style & ES_MULTILINE == 0 && ctl.t.style & 0x800 == 0 {
                     c.fill(tx + self.font.width(&shown), ty, 1, fh, TEXT);
                 }
                 c.clip = None;
             }
             Class::Static => {
-                let lines = wrap_px(&self.font, &ctl.text, r.w());
+                if ctl.t.ex_style & WS_EX_STATICEDGE_STATIC != 0 {
+                    c.fill(r.x0, r.y0, r.w() - 1, 1, SHADOW);
+                    c.fill(r.x0, r.y0, 1, r.h() - 1, SHADOW);
+                    c.fill(r.x0, r.y1, r.w(), 1, HILIGHT);
+                    c.fill(r.x1, r.y0, 1, r.h(), HILIGHT);
+                }
+                // Measured: centred text breaks 3 px short of the control's width.
+                let room = if ctl.t.style & 0xF == SS_CENTER { r.w() - 3 } else { r.w() };
+                let lines = wrap_px(&self.font, &ctl.text, room);
+                let top = r.y0 + (ctl.t.ex_style & WS_EX_STATICEDGE_STATIC != 0) as i32;
                 for (i, line) in lines.iter().enumerate() {
-                    let y = r.y0 + i as i32 * fh;
+                    let y = top + i as i32 * fh;
                     if y >= r.y1 {
                         break;
                     }

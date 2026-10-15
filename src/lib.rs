@@ -5,6 +5,7 @@ pub mod bmp;
 pub mod dialog;
 pub mod game;
 pub mod help;
+pub mod keys;
 pub mod launcher;
 pub mod lvl;
 pub mod menubar;

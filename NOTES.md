@@ -348,4 +348,18 @@
 - Zones: Add Custom... (dialog 176) on top of the zones dialog. Trace (107): one ping a second to
   the selected zone, Cycles counter, Export writes trace.txt. Proxy (151) saves proxy* keys in the
   profile (the client doesn't use a proxy yet). Macros/KeyDefs/Options/Advanced/Banners: shown only.
-- Test aids: --clicks "x,y;..." (one every 15 frames from 30), --type "text" (\t \n \b).
+- Key definitions / macros (src/keys.rs): keyboard.dat (`KeyDef = Name` starts a set; `Action =
+  [Shift] [Ctrl] [Alt] Key`) and macro.dat (`macro = Name`, `1..20 = text`), the install's formats.
+  A binding is active while all its keys are held unless a held binding with a superset of keys
+  is also active (Shift+Tab = mine, not afterburner too). The game reads the profile's sets:
+  movement/weapons held, toggles/players/attach/cycle/PlaySpec on press, MacroN sends its line as
+  public chat. ReqMsgKey off (default) = typing starts a message, as in the original; 1-8/S ship
+  keys only with ReqMsgKey on.
+- Edit Keyboard/Controller Definitions (122) and Edit Macros (120) edit those files. Key buttons
+  are Continuum-drawn (silver line, black-framed grey box, white text; black while capturing,
+  when the list gives way to the instructions static 1067). Right-click clears a binding. Macro
+  edits: black, lavender (160,160,255) Wine Courier (captured glyphs, 9 px cells at +7,+3).
+  Versus the original: KeyDefs/Macros differ only by the original's tooltips; capture state 0 px.
+  Centred statics wrap 3 px short of the width; carets blink at 530 ms.
+- Test aids: --clicks "x,y;..." (one every 15 frames from 30), --type "text" (\t \n \b);
+  game: --press Action@frame, --keys / --macros set names.

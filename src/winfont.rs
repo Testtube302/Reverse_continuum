@@ -27,6 +27,8 @@ pub struct BitmapFont {
 pub const MS_SANS_SERIF_8: &[u8] = include_bytes!("../third_party/wine-fonts/mssansserif8.bfnt");
 pub const TAHOMA_8: &[u8] = include_bytes!("../third_party/wine-fonts/tahoma8.bfnt");
 pub const TAHOMA_8_BOLD: &[u8] = include_bytes!("../third_party/wine-fonts/tahoma8bold.bfnt");
+/// Wine's Courier New as the original draws it in macro edits (9 px cells, captured glyphs).
+pub const COURIER_15: &[u8] = include_bytes!("../third_party/wine-fonts/courier15.bfnt");
 
 impl BitmapFont {
     pub fn parse(d: &[u8]) -> Option<Self> {

@@ -7,6 +7,7 @@ mod menu;
 
 use aicontinuum::assets::AssetDir;
 use aicontinuum::game::{EffectKind, Game};
+use aicontinuum::keys::{self, Key, KeySet, MacroSet};
 use aicontinuum::launcher::Action;
 use aicontinuum::lvl::{Map, TILE_PIXELS};
 use aicontinuum::net::session::{Config, Phase, SPECTATOR, Session};
@@ -64,6 +65,11 @@ struct Args {
     autoplay: bool,
     /// Startup-screen test aid: left clicks at these points, one every 15 frames from frame 30.
     clicks: Vec<(i32, i32)>,
+    /// Key definition and macro set names (the profile's keyboard / macros).
+    keyset: String,
+    macroset: String,
+    /// Game test aid: act as if a key definition was pressed at a frame ("Macro1@300").
+    press: Vec<(String, u32)>,
     /// Startup-screen test aid: typed after the clicks, one character a frame (\t Tab, \n Enter).
     typed: String,
 }
@@ -97,6 +103,9 @@ fn parse_args() -> Args {
         autoplay: false,
         clicks: Vec::new(),
         typed: String::new(),
+        keyset: "Default".into(),
+        press: Vec::new(),
+        macroset: "Default".into(),
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -133,6 +142,14 @@ fn parse_args() -> Args {
             }
             "--right" => args.right_held = true,
             "--autoplay" => args.autoplay = true,
+            "--keys" => args.keyset = value(),
+            "--press" => {
+                let v = value();
+                if let Some((a, f)) = v.split_once('@') {
+                    args.press.push((a.to_string(), f.parse().unwrap_or(0)));
+                }
+            }
+            "--macros" => args.macroset = value(),
             "--type" => args.typed = value().replace("\\t", "\t").replace("\\n", "\n").replace("\\b", "\u{8}"),
             "--clicks" => {
                 args.clicks = value()
@@ -411,30 +428,72 @@ fn draw_stars(cam_px: (f32, f32), sw: f32, sh: f32) {
     }
 }
 
-fn read_input() -> Input {
-    let shift = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
-    let tab = is_key_down(KeyCode::Tab);
-    let ctrl = is_key_down(KeyCode::LeftControl) || is_key_down(KeyCode::RightControl);
-    // Continuum's default keys: Shift+Ctrl repel, Shift+Del burst, F5 decoy, F6 thor,
-    // F3 rocket, F4 brick, Insert warp, Shift+Insert portal.
-    let insert = is_key_down(KeyCode::Insert);
+/// Whether a key named in keyboard.dat is held.
+fn key_down(k: Key) -> bool {
+    use KeyCode as K;
+    let any = |codes: &[KeyCode]| codes.iter().any(|c| is_key_down(*c));
+    match k {
+        Key::Shift => any(&[K::LeftShift, K::RightShift]),
+        Key::Ctrl => any(&[K::LeftControl, K::RightControl]),
+        Key::Alt => any(&[K::LeftAlt, K::RightAlt]),
+        Key::Left => is_key_down(K::Left),
+        Key::Right => is_key_down(K::Right),
+        Key::Up => is_key_down(K::Up),
+        Key::Down => is_key_down(K::Down),
+        Key::Tab => is_key_down(K::Tab),
+        Key::Space => is_key_down(K::Space),
+        Key::Enter => any(&[K::Enter, K::KpEnter]),
+        Key::Backspace => is_key_down(K::Backspace),
+        Key::Insert => is_key_down(K::Insert),
+        Key::Delete => is_key_down(K::Delete),
+        Key::Home => is_key_down(K::Home),
+        Key::End => is_key_down(K::End),
+        Key::PgUp => is_key_down(K::PageUp),
+        Key::PgDown => is_key_down(K::PageDown),
+        Key::F(n) => key_code_f(n).is_some_and(is_key_down),
+        Key::Char(c) => key_code_char(c).is_some_and(is_key_down),
+    }
+}
+
+pub fn key_code_f(n: u8) -> Option<KeyCode> {
+    use KeyCode as K;
+    [K::F1, K::F2, K::F3, K::F4, K::F5, K::F6, K::F7, K::F8, K::F9, K::F10, K::F11, K::F12].get((n as usize).checked_sub(1)?).copied()
+}
+
+pub fn key_code_char(c: char) -> Option<KeyCode> {
+    use KeyCode as K;
+    let letters = [
+        K::A, K::B, K::C, K::D, K::E, K::F, K::G, K::H, K::I, K::J, K::K, K::L, K::M, K::N, K::O, K::P, K::Q, K::R, K::S, K::T, K::U,
+        K::V, K::W, K::X, K::Y, K::Z,
+    ];
+    let digits = [K::Key0, K::Key1, K::Key2, K::Key3, K::Key4, K::Key5, K::Key6, K::Key7, K::Key8, K::Key9];
+    match c.to_ascii_uppercase() {
+        l @ 'A'..='Z' => Some(letters[(l as u8 - b'A') as usize]),
+        d @ '0'..='9' => Some(digits[(d as u8 - b'0') as usize]),
+        _ => None,
+    }
+}
+
+/// Ship controls from the held key definitions.
+fn read_input(active: &[&str]) -> Input {
+    let on = |a: &str| active.contains(&a);
     Input {
-        left: is_key_down(KeyCode::Left),
-        right: is_key_down(KeyCode::Right),
-        forward: is_key_down(KeyCode::Up),
-        backward: is_key_down(KeyCode::Down),
-        afterburner: shift && !tab && !ctrl,
-        gun: ctrl && !shift,
-        bomb: tab && !shift,
-        mine: tab && shift,
-        repel: ctrl && shift,
-        burst: shift && is_key_down(KeyCode::Delete),
-        decoy: is_key_down(KeyCode::F5),
-        thor: is_key_down(KeyCode::F6),
-        rocket: is_key_down(KeyCode::F3),
-        brick: is_key_down(KeyCode::F4),
-        portal: insert && shift,
-        warp: insert && !shift,
+        left: on("TurnLeft"),
+        right: on("TurnRight"),
+        forward: on("Forward"),
+        backward: on("Reverse"),
+        afterburner: on("Afterburners"),
+        gun: on("Bullet"),
+        bomb: on("Bomb"),
+        mine: on("Mine"),
+        repel: on("Repel"),
+        burst: on("Burst"),
+        decoy: on("Decoy"),
+        thor: on("Thor"),
+        rocket: on("Rocket"),
+        brick: on("Brick"),
+        portal: on("Portal"),
+        warp: on("Warp"),
     }
 }
 
@@ -448,8 +507,10 @@ async fn main() {
     let mut screen = menu::MenuScreen::load(&assets).unwrap_or_else(|e| die(e));
     loop {
         match screen.run(&args).await {
-            Some(Action::Play { addr, name, password, ship, fullscreen, resolution, .. }) => {
+            Some(Action::Play { addr, name, password, ship, fullscreen, resolution, keys, macros, .. }) => {
                 let mut game_args = parse_args();
+                game_args.keyset = keys;
+                game_args.macroset = macros;
                 game_args.connect = Some(addr);
                 game_args.name = name;
                 game_args.password = password;
@@ -530,6 +591,23 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
     let mut fire_held = false;
     let mut menu_open = args.menu;
     let mut help_page: Option<usize> = args.help;
+    // The profile's key definitions and macros from keyboard.dat / macro.dat.
+    let keyset = assets
+        .read("keyboard.dat")
+        .map(|b| keys::parse_keysets(&String::from_utf8_lossy(&b)))
+        .unwrap_or_default()
+        .into_iter()
+        .find(|k| k.name == args.keyset)
+        .unwrap_or_else(|| KeySet::defaults("Default"));
+    let macros = assets
+        .read("macro.dat")
+        .map(|b| keys::parse_macros(&String::from_utf8_lossy(&b)))
+        .unwrap_or_default()
+        .into_iter()
+        .find(|m| m.name == args.macroset)
+        .unwrap_or_else(|| MacroSet::empty("Default"));
+    let mut held_actions: Vec<String> = Vec::new();
+    let mut last_ship: u8 = args.ship.unwrap_or(0);
 
     loop {
         // Chat entry: Enter opens/sends, Esc cancels; while typing, keys go to the message.
@@ -569,10 +647,39 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
                 None => hud.chat_input = Some(String::new()),
             }
         }
+        // Bindings held this frame (none while typing or in the Esc menu) and the newly pressed ones.
+        let active: Vec<String> = if typing || menu_open {
+            Vec::new()
+        } else {
+            keyset.active(key_down).into_iter().map(String::from).collect()
+        };
+        let mut pressed: Vec<String> = active.iter().filter(|a| !held_actions.contains(a)).cloned().collect();
+        pressed.extend(args.press.iter().filter(|(_, f)| *f == frame).map(|(a, _)| a.clone()));
+        held_actions = active.clone();
+        let ctrl_or_alt = key_down(Key::Ctrl) || key_down(Key::Alt);
         while let Some(c) = get_char_pressed() {
+            // Without "Require Msg Key", typing a character starts a message, as in the original.
+            if hud.chat_input.is_none() && !keyset.req_msg_key && !menu_open && !ctrl_or_alt && c.is_ascii_graphic() {
+                hud.chat_input = Some(String::new());
+            }
             if let Some(input) = hud.chat_input.as_mut() {
-                if (' '..='~').contains(&c) && input.len() < 200 && typing {
+                if (' '..='~').contains(&c) && input.len() < 200 && (typing || input.is_empty()) {
                     input.push(c);
+                }
+            }
+        }
+        if pressed.iter().any(|a| a == "Message") && hud.chat_input.is_none() {
+            hud.chat_input = Some(String::new());
+        }
+        // Macros: send the line as chat.
+        for a in &pressed {
+            if let Some(n) = a.strip_prefix("Macro").and_then(|n| n.parse::<usize>().ok()) {
+                let text = macros.lines.get(n.wrapping_sub(1)).cloned().unwrap_or_default();
+                if !text.trim().is_empty() {
+                    match game.session.as_mut() {
+                        Some(s) => s.send_public_chat(&text),
+                        None => game.notices.push(text),
+                    }
                 }
             }
         }
@@ -637,32 +744,53 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
             ship.velocity = Vec2::default();
             placed_at = frame > 300;
         }
-        let ship_keys = [KeyCode::Key1, KeyCode::Key2, KeyCode::Key3, KeyCode::Key4, KeyCode::Key5, KeyCode::Key6, KeyCode::Key7, KeyCode::Key8];
-        if let Some(i) = ship_keys.iter().position(|k| is_key_pressed(*k)).filter(|_| !typing && !menu_open) {
-            game.request_ship(i as u8);
+        // 1-8 / S pick a ship directly only when typing doesn't start a message.
+        if keyset.req_msg_key {
+            let ship_keys = [KeyCode::Key1, KeyCode::Key2, KeyCode::Key3, KeyCode::Key4, KeyCode::Key5, KeyCode::Key6, KeyCode::Key7, KeyCode::Key8];
+            if let Some(i) = ship_keys.iter().position(|k| is_key_pressed(*k)).filter(|_| !typing && !menu_open) {
+                game.request_ship(i as u8);
+            }
+            if !typing && !menu_open && is_key_pressed(KeyCode::S) && !is_key_down(KeyCode::Tab) {
+                game.request_ship(SPECTATOR);
+            }
         }
-        if !typing && !menu_open && is_key_pressed(KeyCode::S) && !is_key_down(KeyCode::Tab) {
-            game.request_ship(SPECTATOR);
+        if let Some(ship) = game.ship.as_ref() {
+            last_ship = ship.ship as u8;
         }
-        if !typing && !menu_open {
-            // Home stealth, Shift+Home cloak, End X-radar, Shift+End antiwarp (Continuum defaults).
-            let shift = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
+        {
             use aicontinuum::sim::{STATUS_ANTIWARP, STATUS_CLOAK, STATUS_STEALTH, STATUS_XRADAR};
-            if is_key_pressed(KeyCode::Home) {
-                game.toggle_status(if shift { STATUS_CLOAK } else { STATUS_STEALTH });
+            for a in &pressed {
+                match a.as_str() {
+                    "Stealth" => game.toggle_status(STATUS_STEALTH),
+                    "Cloak" => game.toggle_status(STATUS_CLOAK),
+                    "XRadar" => game.toggle_status(STATUS_XRADAR),
+                    "AntiWarp" => game.toggle_status(STATUS_ANTIWARP),
+                    "NextPlayer" => hud::move_selection(&mut hud, &game, true),
+                    "PrevPlayer" => hud::move_selection(&mut hud, &game, false),
+                    "NextPage" | "PrevPage" => {
+                        for _ in 0..10 {
+                            hud::move_selection(&mut hud, &game, a == "NextPage");
+                        }
+                    }
+                    "Attach" => game.request_attach(hud.selected),
+                    "PlaySpec" => game.request_ship(if game.ship.is_some() { SPECTATOR } else { last_ship }),
+                    "Cycle" => {
+                        // Cycles the six stat box views, then hides it.
+                        hud.statbox = match hud.statbox {
+                            None => Some(0),
+                            Some(v) if v < 5 => Some(v + 1),
+                            Some(_) => None,
+                        };
+                    }
+                    "Multi" => {
+                        if let Some(ship) = game.ship.as_mut() {
+                            ship.multifire = !ship.multifire;
+                            game.notices.push(format!("Multifire {}", if ship.multifire { "on" } else { "off" }));
+                        }
+                    }
+                    _ => {}
+                }
             }
-            if is_key_pressed(KeyCode::End) {
-                game.toggle_status(if shift { STATUS_ANTIWARP } else { STATUS_XRADAR });
-            }
-        }
-        if !typing && !menu_open && is_key_pressed(KeyCode::PageDown) {
-            hud::move_selection(&mut hud, &game, true);
-        }
-        if !typing && !menu_open && is_key_pressed(KeyCode::PageUp) {
-            hud::move_selection(&mut hud, &game, false);
-        }
-        if !typing && !menu_open && is_key_pressed(KeyCode::F7) {
-            game.request_attach(hud.selected);
         }
         if !typing && !menu_open && is_key_pressed(KeyCode::F1) {
             // F1 pages through help, closing after the last page.
@@ -671,21 +799,6 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
                 Some(p) if p + 1 < hud.help.len() => Some(p + 1),
                 Some(_) => None,
             };
-        }
-        if !typing && !menu_open && is_key_pressed(KeyCode::F2) {
-            // F2 cycles the six stat box views, then hides it.
-            hud.statbox = match hud.statbox {
-                None => Some(0),
-                Some(v) if v < 5 => Some(v + 1),
-                Some(_) => None,
-            };
-        }
-        let shift_down = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
-        if !typing && !shift_down && is_key_pressed(KeyCode::Delete) {
-            if let Some(ship) = game.ship.as_mut() {
-                ship.multifire = !ship.multifire;
-                game.notices.push(format!("Multifire {}", if ship.multifire { "on" } else { "off" }));
-            }
         }
 
         let mut fired_any = aicontinuum::weapons::WeaponData::default();
@@ -709,7 +822,8 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
                     scripted_ticks += 1;
                 }
             } else {
-                let mut input = if typing { Input::default() } else { read_input() };
+                let active_refs: Vec<&str> = held_actions.iter().map(|s| s.as_str()).collect();
+                let mut input = if typing { Input::default() } else { read_input(&active_refs) };
                 // Held for 20 frames: a frame can pass without a game tick at high frame rates.
                 if args.throw_after.is_some_and(|f| frame >= f && frame < f + 20) {
                     input.warp = true;
