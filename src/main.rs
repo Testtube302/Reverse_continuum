@@ -39,6 +39,8 @@ struct Args {
     at: Option<Vec2>,
     /// Start with the Esc menu open (for screenshots).
     menu: bool,
+    /// Start with the F2 stat box shown.
+    statbox: bool,
 }
 
 fn parse_args() -> Args {
@@ -56,6 +58,7 @@ fn parse_args() -> Args {
         mute: false,
         at: None,
         menu: false,
+        statbox: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -84,6 +87,7 @@ fn parse_args() -> Args {
             "--mute" => args.mute = true,
             "--fullscreen" => {}
             "--menu" => args.menu = true,
+            "--statbox" => args.statbox = true,
             "--at" => {
                 let v = value();
                 let (x, y) = v.split_once(',').unwrap_or_else(|| panic!("--at x,y"));
@@ -318,6 +322,7 @@ async fn main() {
     let assets = AssetDir::locate(args.assets.as_deref()).unwrap_or_else(|e| die(e));
     let gfx = Graphics::load(&assets);
     let mut hud = hud::Hud::load(&assets);
+    hud.show_statbox = args.statbox;
     let mut sounds = Sounds { clips: HashMap::new(), muted: args.mute || args.screenshot.is_some() };
 
     let mut game = match args.connect {
@@ -426,6 +431,9 @@ async fn main() {
         if !typing && !menu_open && is_key_pressed(KeyCode::S) && !is_key_down(KeyCode::Tab) {
             game.request_ship(SPECTATOR);
         }
+        if !typing && !menu_open && is_key_pressed(KeyCode::F2) {
+            hud.show_statbox = !hud.show_statbox;
+        }
         if !typing && is_key_pressed(KeyCode::Delete) {
             if let Some(ship) = game.ship.as_mut() {
                 ship.multifire = !ship.multifire;
@@ -469,6 +477,9 @@ async fn main() {
                 game.send_updates(fired_any);
             }
             draw_world(&game, tiles.as_ref().unwrap(), &gfx, &mut hud);
+            if hud.show_statbox {
+                hud::draw_statbox(&hud, &game);
+            }
             if menu_open {
                 hud::draw_menu(&hud);
             }

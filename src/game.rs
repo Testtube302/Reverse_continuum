@@ -71,10 +71,10 @@ const OFFLINE_PID: u16 = 0;
 impl Game {
     pub fn offline(map: Map, settings: ArenaSettings, ship: u8) -> Self {
         let mut g = Self::new(None, Some((Arc::new(map), Arc::new(settings))));
-        let (map, settings) = g.world().unwrap();
-        g.ship = Some(spawn_ship(map, settings, ship, 0));
         // Offline there's no server seed; any fixed seed gives a playable prize field.
         g.greens.sync(0x5EED_1234);
+        let (map, settings) = g.world().unwrap();
+        g.ship = Some(fresh_ship(map, settings, ship, 0, 0x5EED_1234));
         g
     }
 
@@ -144,8 +144,9 @@ impl Game {
             s.request_ship(ship);
             return;
         }
+        let local = self.random(u32::MAX);
         let Some((map, settings)) = self.world() else { return };
-        let new = (ship < 8).then(|| spawn_ship(map, settings, ship, 0));
+        let new = (ship < 8).then(|| fresh_ship(map, settings, ship, 0, local));
         self.ship = new;
         self.dead_ticks = 0;
     }
@@ -154,6 +155,16 @@ impl Game {
     pub fn frame(&mut self) {
         let Some(s) = self.session.as_mut() else { return };
         s.update();
+        // Apply new prize seeds immediately: a ship spawned below draws its starting prizes from it.
+        let mut i = 0;
+        while i < s.prize_events.len() {
+            if let PrizeEvent::Seed(seed) = s.prize_events[i] {
+                self.greens.sync(seed);
+                s.prize_events.remove(i);
+            } else {
+                i += 1;
+            }
+        }
         let Some(me) = s.me().map(|m| m.ship) else { return };
         if !s.ready() {
             return;
@@ -164,7 +175,7 @@ impl Game {
             (_, n) if n < 8 => {
                 let seed = self.random(u32::MAX);
                 let (map, settings) = self.world().unwrap();
-                self.ship = Some(spawn_ship(map, settings, n, seed));
+                self.ship = Some(fresh_ship(map, settings, n, seed, seed.rotate_left(13) ^ 0xA5A5_5A5A));
                 self.dead_ticks = 0;
             }
             _ => {}
@@ -213,7 +224,7 @@ impl Game {
             if self.dead_ticks == 0 {
                 let seed = self.random(u32::MAX);
                 if let Some(kind) = self.ship.as_ref().map(|s| s.ship) {
-                    self.ship = Some(spawn_ship(&map, &settings, kind, seed));
+                    self.ship = Some(fresh_ship(&map, &settings, kind, seed, seed.rotate_left(13) ^ 0xA5A5_5A5A));
                 }
             }
         } else if let Some(ship) = self.ship.as_mut() {
@@ -485,6 +496,39 @@ fn fire_sound(data: WeaponData) -> String {
     }
 }
 
+/// A newly (re)spawned ship: placed by [`spawn_ship`], then given InitialBounty random prizes.
+/// The original client draws these from local randomness (verified: three respawns within one
+/// prize-seed window gave three different loadouts), so `prize_seed` here is a local random value,
+/// not the shared green seed. Bounty ends at InitialBounty.
+pub fn fresh_ship(map: &Map, settings: &ArenaSettings, ship: u8, spawn_seed: u32, prize_seed: u32) -> Ship {
+    let mut s = spawn_ship(map, settings, ship, spawn_seed);
+    let initial_bounty = settings.ships[ship as usize].initial_bounty;
+    let mut seed = prize_seed;
+    let mut no_random = |_: u32| 0;
+    let (mut given, mut attempts) = (0, 0);
+    while given < initial_bounty && attempts < 9999 {
+        attempts += 1;
+        let p = prizes::generate(&mut seed, settings, false);
+        if p == 0 {
+            break; // No prize weights in this arena.
+        }
+        if matches!(p, prizes::FULL_CHARGE | prizes::ENGINE_SHUTDOWN | prizes::SHIELDS | prizes::SUPER | prizes::WARP | prizes::BRICK) {
+            continue;
+        }
+        let _ = prizes::apply(&mut s, p, settings, &mut seed, &mut no_random);
+        given += 1;
+    }
+    s.energy = s.max_energy as f32;
+    s.bounty = initial_bounty;
+    if std::env::var_os("AIC_DEBUG_SPAWN").is_some() {
+        eprintln!(
+            "spawn ship={ship} seed={prize_seed:08X} bounty={initial_bounty} energy={} guns={} bombs={} items={:?} caps={:?} shrap={}",
+            s.max_energy, s.guns, s.bombs, s.items, s.caps, s.shrapnel
+        );
+    }
+    s
+}
+
 /// Places a fresh ship near the map centre, offset pseudo-randomly by `seed`.
 pub fn spawn_ship(map: &Map, settings: &ArenaSettings, ship: u8, seed: u32) -> Ship {
     let r = settings.ships[ship as usize].radius_tiles();
@@ -560,5 +604,24 @@ mod prize_tests {
         assert_eq!(g.ship.as_ref().unwrap().guns, guns + 1);
         assert!(g.notices.iter().any(|n| n == "Guns upgraded."));
         assert!(g.sounds.iter().any(|s| s.name == "prize"));
+    }
+}
+
+#[cfg(test)]
+mod spawn_tests {
+    use super::*;
+
+    #[test]
+    fn initial_bounty_prizes_are_deterministic_and_restore_bounty() {
+        let mut settings = ArenaSettings::default();
+        settings.ships[0].initial_bounty = 40;
+        let map = Map::empty();
+        let a = fresh_ship(&map, &settings, 0, 1, 777);
+        let b = fresh_ship(&map, &settings, 0, 2, 777);
+        assert_eq!((a.guns, a.bombs, a.items, a.max_energy), (b.guns, b.bombs, b.items, b.max_energy));
+        assert_eq!(a.bounty, 40);
+        assert_eq!(a.energy, a.max_energy as f32);
+        let plain = Ship::new(0, Vec2::new(0.0, 0.0), &settings);
+        assert!(a.guns > plain.guns || a.max_energy > plain.max_energy || a.items != plain.items, "upgraded");
     }
 }

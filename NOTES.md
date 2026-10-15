@@ -34,7 +34,14 @@
       energy bar track ±182 @y9 h2, fill = 182*energy/MaximumEnergy @y14 h5, radar label
       "h:mmam  J10" right-aligned to radar edge at radar.y-20. Outside the map only a 1-tile ring of
       tile 20 is drawn. Spectators start at map (0,0).
-      TODO: stat box (F2), help (F1), name-tag toggles, LED rows 1-2 meaning (currently 0),
+      Round 2 (2026-10-15): in-ship HUD diffed with matched loadouts (rig arena: PrizeFactor=0,
+      PrizeDelay=30000, [Warbird] InitialBounty=0): energy digits 0 px, panel 1, icon columns 2-3,
+      energy track 2 (rest = stars / fill animation phase). LED rows y=33/45/57. Track has a bright
+      inner segment = ship capacity (182*max_energy/MaximumEnergy). Spawn = InitialBounty random
+      prizes from LOCAL randomness (original gives different loadouts on respawn within one seed
+      window — nullspace's shared-seed version is wrong). Prize seed must be applied before spawn.
+      F2 stat box (names view) added: box 108 wide at (3,3), count centred at x=49, rows y=18+12i.
+      TODO: help (F1), name-tag toggles, LED rows 1-2 meaning (currently 0),
       bg sparkle objects (bg01-14), door animation, flags, LVZ, in-ship full-screen diff with
       matched state (original's ship had multiprize upgrades), Windows clock offset (uses `date`).
 

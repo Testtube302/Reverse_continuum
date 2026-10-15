@@ -57,6 +57,8 @@ pub struct Hud {
     healthbar: Texture2D,
     disp: Texture2D,
     led: Texture2D,
+    spectate: Texture2D,
+    pub show_statbox: bool,
     gradient: Texture2D,
     icons: Texture2D,
     icon_counts: Texture2D,
@@ -90,6 +92,8 @@ impl Hud {
             healthbar: load_texture(assets, "hlthbar"),
             disp: load_texture(assets, "disp"),
             led: load_texture(assets, "led"),
+            spectate: load_texture(assets, "spectate"),
+            show_statbox: false,
             gradient: load_texture(assets, "gradient"),
             icons: load_texture(assets, "Icons"),
             icon_counts: load_texture(assets, "icondoor"),
@@ -162,9 +166,9 @@ impl Hud {
 
         // Three LED counters (7x10 digits) right-aligned in the panel windows.
         // TODO: rows 1 and 2 are always 0 for us; identify what the original shows there.
-        self.led(0, sw - 12.0, 31.0);
-        self.led(0, sw - 33.0, 44.0);
-        self.led(0, sw - 12.0, 44.0);
+        self.led(0, sw - 12.0, 33.0);
+        self.led(0, sw - 33.0, 45.0);
+        self.led(0, sw - 12.0, 45.0);
         self.led(ship.bounty, sw - 12.0, 57.0);
 
         // Energy bar: a 2 px track and a 5 px animated fill, mirrored around the centre.
@@ -177,8 +181,11 @@ impl Hud {
         let health = ship.energy / ship.max_energy.max(1) as f32;
         let row = if health > 0.5 { 0.0 } else if health > 0.25 { 1.0 } else { 2.0 };
         let anim = ((get_time() * 10.0) as u32 % 14) as f32;
+        // Dim full-length track = MaximumEnergy; bright inner segment = this ship's current capacity.
         let track = Rect::new(5.0, 0.0, 1.0, 1.0);
         blit_scaled(&self.gradient, track, cx - HALF, 9.0, HALF * 2.0, 2.0);
+        let capacity = (HALF * (ship.max_energy as f32 / max_energy as f32).min(1.0)).round();
+        blit_scaled(&self.gradient, Rect::new(0.0, 0.0, 1.0, 1.0), cx - capacity, 9.0, capacity * 2.0, 2.0);
         let fill = Rect::new(anim, row, 1.0, 1.0);
         blit_scaled(&self.gradient, fill, cx - view, 14.0, view * 2.0, 5.0);
         blit(&self.healthbar, Rect::new(0.0, 0.0, bar_w, bar_h), cx - bar_w / 2.0, 0.0);
@@ -483,4 +490,45 @@ pub fn draw_menu(hud: &Hud) {
         hud.text(line, TextColor::White, 551.0, 30.0 + i as f32 * 12.0);
     }
     hud.text("Any other key to resume game", TextColor::Yellow, 407.0, 162.0);
+}
+
+/// F2 stat box (player names view), laid out as in the original: a 108 px wide box at the
+/// top left with the player count centred in the header and one 12 px row per player.
+pub fn draw_statbox(hud: &Hud, game: &Game) {
+    let Some(s) = &game.session else { return };
+    let Some(me) = s.me() else { return };
+    let mut players: Vec<_> = s.players.values().collect();
+    players.sort_by_key(|p| (p.pid != me.pid, p.name.to_lowercase()));
+    let max_rows = ((screen_height() / 2.0 - 60.0) / 12.0).max(1.0) as usize;
+    let rows = players.len().min(max_rows);
+    let (w, h) = (108.0, 14.0 + 1.0 + rows as f32 * 12.0);
+    hud.swatch(ColorRow::Background, 3.0, 3.0, w, h);
+    let count = players.len().to_string();
+    hud.text(&count, TextColor::Green, 49.0 - count.len() as f32 * FONT_W / 2.0, 4.0);
+    hud.swatch(ColorRow::Border1, 3.0, 16.0, w, 1.0);
+    for (i, p) in players.iter().take(rows).enumerate() {
+        let y = 18.0 + i as f32 * 12.0;
+        let selected = p.pid == me.pid;
+        let marker = match (selected, p.ship >= 8) {
+            (true, false) => Some(0),
+            (false, true) => Some(1),
+            (true, true) => Some(2),
+            _ => None,
+        };
+        if let Some(m) = marker {
+            blit(&hud.spectate, Rect::new(m as f32 * 8.0, 0.0, 8.0, 8.0), 3.0, y + 3.0);
+        }
+        let color = if p.freq == me.freq { TextColor::Yellow } else { TextColor::White };
+        let name: String = p.name.chars().take(12).collect();
+        hud.text(&name, color, 13.0, y);
+    }
+    // Same three-ring bevel as the menu, around (3,3)-(3+w,3+h).
+    let (x0, x1, y0, y1) = (0.0, 3.0 + w + 2.0, 0.0, 3.0 + h + 2.0);
+    for (inset, row, cut) in [(2.0, ColorRow::Border1, 0.0), (1.0, ColorRow::Border2, 0.0), (0.0, ColorRow::Border3, 2.0)] {
+        let (l, r, t, b) = (x0 + inset, x1 - inset, y0 + inset, y1 - inset);
+        hud.swatch(row, l + cut, t, r - l + 1.0 - 2.0 * cut, 1.0);
+        hud.swatch(row, l + cut, b, r - l + 1.0 - 2.0 * cut, 1.0);
+        hud.swatch(row, l, t + cut, 1.0, b - t + 1.0 - 2.0 * cut);
+        hud.swatch(row, r, t + cut, 1.0, b - t + 1.0 - 2.0 * cut);
+    }
 }
