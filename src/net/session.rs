@@ -1,5 +1,5 @@
 //! Game session: login, arena entry, settings, map download, players and positions.
-//! Speaks the VIE (SubSpace 1.35) client protocol on top of [`Transport`].
+//! VIE by default, with an opt-in Continuum transport and login format.
 
 use std::collections::BTreeMap;
 use std::io;
@@ -172,6 +172,7 @@ pub struct Chat {
 
 pub struct Session {
     pub transport: Transport,
+    continuum_id: Option<[u8; 64]>,
     pub config: Config,
     pub phase: Phase,
     pub pid: Option<u16>,
@@ -216,8 +217,25 @@ pub struct Session {
 impl Session {
     pub fn connect(config: Config) -> io::Result<Self> {
         let transport = Transport::connect(config.server)?;
-        Ok(Self {
+        Ok(Self::with_transport(config, transport, None))
+    }
+
+    /// Connect using Continuum transport and its 165-byte login format.
+    /// The identity field is caller-supplied; its billing-server interpretation
+    /// is not part of the public zone protocol. No integrity response is forged.
+    pub fn connect_continuum(
+        config: Config,
+        expand: impl FnMut(u32) -> Option<[u32; 20]> + Send + 'static,
+        identity: [u8; 64],
+    ) -> io::Result<Self> {
+        let transport = Transport::connect_continuum(config.server, expand)?;
+        Ok(Self::with_transport(config, transport, Some(identity)))
+    }
+
+    fn with_transport(config: Config, transport: Transport, continuum_id: Option<[u8; 64]>) -> Self {
+        Self {
             transport,
+            continuum_id,
             config,
             phase: Phase::Connecting,
             pid: None,
@@ -246,7 +264,7 @@ impl Session {
             expected_map_checksum: 0,
             last_position_sent: 0,
             last_position_timestamp: 0,
-        })
+        }
     }
 
     /// True once we're in the arena with settings and map loaded.
@@ -430,14 +448,15 @@ impl Session {
     }
 
     fn send_login(&mut self, new_user: bool) {
-        let mut p = vec![0x09, new_user as u8];
+        let mut p = vec![if self.continuum_id.is_some() { 0x24 } else { 0x09 }, new_user as u8];
         p.extend(fixed_str(&self.config.name, 32));
         p.extend(fixed_str(&self.config.password, 32));
         p.extend_from_slice(&(crc32(self.config.name.as_bytes()) | 1).to_le_bytes()); // machine id
         p.push(0x04); // connect type
         p.extend_from_slice(&0u16.to_le_bytes()); // timezone bias
         p.extend_from_slice(&0u16.to_le_bytes());
-        p.extend_from_slice(&0x86u16.to_le_bytes()); // client version (1.34/VIE)
+        let version = if self.continuum_id.is_some() { 40u16 } else { 0x86 };
+        p.extend_from_slice(&version.to_le_bytes());
         p.extend_from_slice(&444u16.to_le_bytes());
         p.extend_from_slice(&0u16.to_le_bytes()); // no optional client features
         p.extend_from_slice(&[0; 8]);
@@ -446,6 +465,9 @@ impl Session {
         p.extend_from_slice(&port.to_le_bytes());
         p.extend_from_slice(&[0; 4]);
         debug_assert_eq!(p.len(), 101);
+        if let Some(identity) = self.continuum_id {
+            p.extend_from_slice(&identity);
+        }
         self.transport.send_reliable(&p);
     }
 

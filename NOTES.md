@@ -289,6 +289,11 @@
 - VMs on apollo can't reach the public address (no hairpin NAT); use 192.168.122.50 from inside.
 
 ## Open items
+- 2026-10-15 protocol review: see docs/protocol-compatibility-review.md for pinned
+  SS.NET sources separating listener policy, transport encryption, login format,
+  and executable validation. Continuum encryption remains unimplemented. Fixed
+  oversized UDP input panicking in VIE keystream indexing; encrypted loopback
+  regression reproduces the old failure and passes after the receive-size guard.
 - Debug text overlay + macroquad text labels in main.rs are temporary until the real HUD (M4).
 - Haven't yet run the original Continuum.exe under Wine against the local zone (integration phase).
 
@@ -363,3 +368,49 @@
   Centred statics wrap 3 px short of the width; carets blink at 530 ms.
 - Test aids: --clicks "x,y;..." (one every 15 frames from 30), --type "text" (\t \n \b);
   game: --press Action@frame, --keys / --macros set names.
+
+## Continuum investigation (2026-10-15)
+- User explicitly requested REA-based transport investigation, superseding the earlier
+  no-binary-analysis scope for this work. See docs/research/continuum/README.md.
+- Fresh official 0.40 executable hash matches the isolated reference rig. Captured
+  official `00 01 ... 11 00` -> `00 10` -> `00 11` exchange; same-word VIE probe
+  returns `00 02`. Official login and arena entry verified in the isolated server log.
+- REA 6.5.0 + Ghidra 12.1.4 used on client and local server adapter/native module.
+- Public nullspace DOES include Continuum packet transforms. Added standalone Rust
+  port with 85 C++ reference vectors and bounds/CRC tests; not connected to transport.
+- Still missing: key2 expansion, key1 finalization, negotiation integration and
+  Continuum login. Constructor accepts only an already-finalized 20-word table.
+
+- Follow-up: implemented the public key1 finalization (derived from the RSA Data
+  Security, Inc. MD5 Message Digest Algorithm as modified by nullspace), verified
+  with 32 independent C++ vectors. This is not key2 expansion.
+- Added Transport::connect_continuum with an explicit expanded-key lookup callback,
+  bounded plaintext handshake retries, encrypted acknowledgement gating, and
+  cipher-specific wire-size guards. Six synthetic UDP tests cover the paths.
+- Local SS.NET diagnostic probe received a Continuum challenge and stopped with
+  missing-expansion status (exit 2); no login was attempted. Game Session remains
+  VIE; real key2 expansion and Continuum login integration are still outstanding.
+
+- Added strict `scrty1` cache lookup from public nullspace history (5743bb7).
+  With the local server's cache, the diagnostic completed real Continuum
+  negotiation and verified the encrypted acknowledgement. Still no game login;
+  a cache is not general key2 expansion. No cache bytes committed.
+- User explicitly approved bounded transfer of reference read-only executable
+  memory to local temporary analysis. REA/Ghidra recovered 1,561 candidate
+  functions; analysis files remain outside the repository.
+
+- Recovered arbitrary-key expansion using pinned reference code locally under
+  Unicorn 2.1.4: 0x457d60 then 0x458be0, synthetic CRT rounding toward -infinity,
+  and bounded integer-exception dispatch. All 1,024 independent server cache
+  records match. Added 32 synthetic-key vectors; no original code/cache committed.
+- Added opt-in Session/CLI Continuum login and local helper protocol; encrypted
+  00 12 challenges receive 00 13 + seed + 80-byte expansion. Headless login
+  entered the local arena with map/settings, then a second run held 90 seconds
+  with one security reply. No server configuration/whitelist change.
+- Important: reference adapter depends on an external pinned original-code image;
+  it is not a standalone Rust expansion rewrite. Billing identity is unspecified
+  and executable checksum remains zero; all-public-zone compatibility unproven.
+- Public-zone verification was declined by the user; no public-zone login was sent.
+- Added an in-repository Claude/reviewer handoff with checkout instructions,
+  available vs external artifacts, reproducible local commands, and concrete
+  production blockers. Updated stale research status and root README provenance.

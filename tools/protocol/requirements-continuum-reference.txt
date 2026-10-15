@@ -1,0 +1,2 @@
+# Optional local reference adapter only; not needed by the Rust game or unit tests.
+unicorn==2.1.4

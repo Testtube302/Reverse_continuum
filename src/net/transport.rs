@@ -8,6 +8,7 @@ use std::net::{SocketAddr, UdpSocket};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::vie::Vie;
+use super::continuum::{ContinuumCipher, MAX_CIPHERTEXT};
 
 pub const MAX_PACKET: usize = 520;
 const RELIABLE_HEADER: usize = 6;
@@ -53,9 +54,16 @@ struct Outgoing {
     sent_tick: u32,
 }
 
+struct ContinuumSession {
+    keys: Option<(u32, u32)>,
+    cipher: Option<ContinuumCipher>,
+    expand: Box<dyn FnMut(u32) -> Option<[u32; 20]> + Send>,
+}
+
 pub struct Transport {
     sock: UdpSocket,
     vie: Vie,
+    continuum: Option<ContinuumSession>,
     pub state: State,
     next_reliable_id: u32,
     unacked: Vec<Outgoing>,
@@ -77,6 +85,25 @@ pub struct Transport {
 
 impl Transport {
     pub fn connect(server: SocketAddr) -> io::Result<Self> {
+        Self::connect_inner(server, None)
+    }
+
+    /// Negotiates Continuum transport using a caller-supplied expanded-key lookup.
+    /// The callback receives key2 and returns its PRE-finalization 20-word table.
+    /// It must return promptly; None explicitly fails negotiation. No key expansion
+    /// implementation or service is bundled. This does not implement Continuum login.
+    pub fn connect_continuum(
+        server: SocketAddr,
+        expand: impl FnMut(u32) -> Option<[u32; 20]> + Send + 'static,
+    ) -> io::Result<Self> {
+        Self::connect_inner(server, Some(ContinuumSession {
+            keys: None,
+            cipher: None,
+            expand: Box::new(expand),
+        }))
+    }
+
+    fn connect_inner(server: SocketAddr, continuum: Option<ContinuumSession>) -> io::Result<Self> {
         let bind: SocketAddr = if server.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" }.parse().unwrap();
         let sock = UdpSocket::bind(bind)?;
         sock.connect(server)?;
@@ -85,6 +112,7 @@ impl Transport {
         let mut t = Self {
             sock,
             vie: Vie::new(now ^ std::process::id().rotate_left(16)),
+            continuum,
             state: State::Handshake { attempts: 0, last_sent: now },
             next_reliable_id: 0,
             unacked: Vec::new(),
@@ -114,21 +142,70 @@ impl Transport {
     }
 
     fn send_encryption_request(&mut self, now: u32) {
-        let mut p = vec![0x00, 0x01];
-        p.extend_from_slice(&self.vie.client_key.to_le_bytes());
-        p.extend_from_slice(&1u16.to_le_bytes()); // protocol 1 = VIE
-        self.send_raw(&p);
+        let mut p = Vec::with_capacity(8);
+        if let Some((key1, _)) = self.continuum.as_ref().and_then(|c| c.keys) {
+            p.extend_from_slice(&[0x00, 0x11]);
+            p.extend_from_slice(&key1.to_le_bytes());
+            p.extend_from_slice(&1u16.to_le_bytes());
+        } else {
+            p.extend_from_slice(&[0x00, 0x01]);
+            p.extend_from_slice(&self.vie.client_key.to_le_bytes());
+            let protocol = if self.continuum.is_some() { 0x11u16 } else { 1u16 };
+            p.extend_from_slice(&protocol.to_le_bytes());
+        }
+        // These negotiation packets remain plaintext even after a table is installed.
+        self.send_wire(&p);
         if let State::Handshake { attempts, .. } = self.state {
             self.state = State::Handshake { attempts: attempts + 1, last_sent: now };
         }
     }
 
     fn send_raw(&mut self, data: &[u8]) {
-        let mut buf = data.to_vec();
-        self.vie.encrypt(&mut buf);
+        let buf = if let Some(cont) = &self.continuum {
+            let Some(cipher) = &cont.cipher else { return };
+            let Ok(buf) = cipher.encrypt(data) else { return };
+            buf
+        } else {
+            let mut buf = data.to_vec();
+            self.vie.encrypt(&mut buf);
+            buf
+        };
+        self.send_wire(&buf);
+    }
+
+    fn send_wire(&mut self, buf: &[u8]) {
         // A full socket buffer just drops the datagram, as UDP would.
-        let _ = self.sock.send(&buf);
+        let _ = self.sock.send(buf);
         self.packets_sent = self.packets_sent.wrapping_add(1);
+    }
+
+    fn accept_continuum_response(&mut self, packet: &[u8]) {
+        if packet.len() != 12 {
+            return;
+        }
+        let Some(cont) = self.continuum.as_mut() else { return };
+        // Once a table is selected, retransmit our existing acknowledgement without
+        // re-expanding or accepting a stale/reordered challenge as a fresh session.
+        if cont.keys.is_some() {
+            return;
+        }
+        if packet[10..12] != [1, 0] {
+            self.fail("unsupported Continuum encryption revision");
+            return;
+        }
+        let key1 = u32_at(packet, 2).unwrap();
+        let key2 = u32_at(packet, 6).unwrap();
+        let Some(table) = (cont.expand)(key2) else {
+            self.fail("Continuum key expansion is unavailable; no session table was supplied");
+            return;
+        };
+        cont.cipher = Some(ContinuumCipher::from_expanded_table(table, key1));
+        cont.keys = Some((key1, key2));
+        let now = now_tick();
+        self.packets_received = self.packets_received.wrapping_add(1);
+        self.last_recv_tick = now;
+        self.state = State::Handshake { attempts: 0, last_sent: now };
+        self.send_encryption_request(now);
     }
 
     /// Sends an unreliable packet.
@@ -178,11 +255,33 @@ impl Transport {
         loop {
             match self.sock.recv(&mut buf) {
                 Ok(n) if n > 0 => {
+                    // Continuum adds a CRC and possibly an escape byte. Keep the
+                    // receive buffer larger than either limit to detect truncation.
+                    let limit = if self.continuum.is_some() { MAX_CIPHERTEXT } else { MAX_PACKET };
+                    if n > limit || self.state == State::Disconnected {
+                        continue;
+                    }
+                    let pkt = if let Some(cont) = &self.continuum {
+                        if matches!(self.state, State::Handshake { .. }) && buf[..n].starts_with(&[0, 0x10]) {
+                            self.accept_continuum_response(&buf[..n]);
+                            continue;
+                        }
+                        let Some(cipher) = &cont.cipher else { continue };
+                        let Ok(pkt) = cipher.decrypt(&buf[..n]) else { continue };
+                        pkt
+                    } else {
+                        let mut pkt = buf[..n].to_vec();
+                        self.vie.decrypt(&mut pkt);
+                        pkt
+                    };
+                    // Do not deliver game packets or process reliable/chunk state
+                    // until the server has acknowledged the encryption session.
+                    if matches!(self.state, State::Handshake { .. })
+                        && !pkt.starts_with(&[0, 2]) && pkt != [0, 7] {
+                        continue;
+                    }
                     self.packets_received = self.packets_received.wrapping_add(1);
                     self.last_recv_tick = now_tick();
-                    let mut pkt = buf[..n].to_vec();
-                    // The handshake response itself arrives unencrypted.
-                    self.vie.decrypt(&mut pkt);
                     self.handle(&pkt);
                 }
                 Ok(_) => {}
@@ -217,7 +316,12 @@ impl Transport {
             State::Handshake { attempts, last_sent } => {
                 if tick_diff(now, last_sent) >= ENCRYPT_RESEND_TICKS as i32 {
                     if attempts >= ENCRYPT_MAX_ATTEMPTS {
-                        self.fail("no response from server");
+                        let waiting_for_ack = self.continuum.as_ref().is_some_and(|c| c.keys.is_some());
+                        self.fail(if waiting_for_ack {
+                            "Continuum encryption acknowledgement timed out"
+                        } else {
+                            "no response from server"
+                        });
                     } else {
                         self.send_encryption_request(now);
                     }
@@ -273,14 +377,38 @@ impl Transport {
         }
         let Some(&kind) = pkt.get(1) else { return };
         match kind {
+            0x12 if self.state == State::Connected && pkt.len() == 6 => {
+                let seed = u32_at(pkt, 2).unwrap();
+                if let Some(cont) = self.continuum.as_mut() {
+                    if let Some(table) = (cont.expand)(seed) {
+                        let mut response = vec![0, 0x13];
+                        response.extend_from_slice(&seed.to_le_bytes());
+                        for word in table {
+                            response.extend_from_slice(&word.to_le_bytes());
+                        }
+                        self.send_raw(&response);
+                    } else {
+                        self.fail("Continuum key expansion challenge could not be answered");
+                    }
+                }
+            }
             0x02 => {
                 if let (State::Handshake { .. }, Some(key)) = (self.state, u32_at(pkt, 2)) {
-                    if self.vie.initialize(key) {
+                    let valid = if let Some(cont) = &self.continuum {
+                        cont.cipher.is_some() && key == 0
+                    } else {
+                        self.vie.initialize(key)
+                    };
+                    if valid {
                         self.state = State::Connected;
                         self.events.push_back(Event::Connected);
                         self.send_sync_request();
                     } else {
-                        self.fail("server sent an invalid encryption key");
+                        self.fail(if self.continuum.is_some() {
+                            "server sent an invalid Continuum encryption acknowledgement"
+                        } else {
+                            "server sent an invalid encryption key"
+                        });
                     }
                 }
             }
@@ -397,6 +525,22 @@ mod tests {
     fn settle(t: &mut Transport) -> Vec<Event> {
         std::thread::sleep(std::time::Duration::from_millis(20));
         t.poll()
+    }
+
+    #[test]
+    fn oversized_encrypted_datagrams_are_dropped() {
+        let (mut t, server, client) = pair();
+        assert!(t.vie.initialize(t.vie.client_key.wrapping_neg()));
+        for len in [2048, MAX_PACKET + 1, 4096] {
+            server.send_to(&vec![0x03; len], client).unwrap();
+            assert!(settle(&mut t).is_empty());
+        }
+        let mut valid = vec![0x03; MAX_PACKET];
+        let expected = valid.clone();
+        t.vie.encrypt(&mut valid);
+        server.send_to(&valid, client).unwrap();
+        assert_eq!(settle(&mut t), vec![Event::Packet(expected)]);
+        assert_eq!(t.state, State::Connected);
     }
 
     #[test]

@@ -1,0 +1,80 @@
+//! Optional local expansion helper. No shell or network service is used.
+//! Protocol: decimal key2 argument; exactly 80 binary bytes on stdout.
+use std::io::{self, Read};
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+
+pub struct CommandExpander {
+    program: PathBuf,
+}
+
+impl CommandExpander {
+    pub fn new(program: PathBuf) -> Self {
+        Self { program }
+    }
+
+    pub fn expand(&mut self, seed: u32) -> io::Result<[u32; 20]> {
+        let mut child = Command::new(&self.program)
+            .arg(seed.to_string())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                outcome => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(outcome.err().unwrap_or_else(|| {
+                        io::Error::new(io::ErrorKind::TimedOut, "key expansion helper timed out")
+                    }));
+                }
+            }
+        };
+        if !status.success() {
+            return Err(io::Error::other("key expansion helper failed"));
+        }
+        let mut bytes = Vec::new();
+        child
+            .stdout
+            .take()
+            .unwrap()
+            .take(81)
+            .read_to_end(&mut bytes)?;
+        decode_table(&bytes)
+    }
+}
+
+fn decode_table(bytes: &[u8]) -> io::Result<[u32; 20]> {
+    if bytes.len() != 80 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "expansion helper must return exactly 80 bytes",
+        ));
+    }
+    Ok(std::array::from_fn(|i| {
+        u32::from_le_bytes(bytes[i * 4..i * 4 + 4].try_into().unwrap())
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn requires_exact_binary_table() {
+        for size in [0, 79, 81, 160] {
+            assert!(decode_table(&vec![0; size]).is_err());
+        }
+        let bytes: Vec<_> = (0..20u32).flat_map(u32::to_le_bytes).collect();
+        assert_eq!(
+            decode_table(&bytes).unwrap(),
+            std::array::from_fn(|i| i as u32)
+        );
+    }
+}

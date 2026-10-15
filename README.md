@@ -3,11 +3,17 @@
 A clean-room SubSpace client written in Rust, aiming to look and play like Continuum 0.40
 and to join zones running ASSS / Subspace Server .NET.
 
-**Clean-room rules:** no code, data or disassembly from `Continuum.exe`. Behaviour comes from
-public protocol documentation, the open-source servers, and the MIT-licensed
-[nullspace](https://github.com/plushmonkey/nullspace) client (© plushmonkey), credited where used.
-No original art or sound is distributed: the client loads them at runtime from the player's own
-Continuum install.
+The core client uses public protocol documentation, open-source servers, and the
+MIT-licensed [nullspace](https://github.com/plushmonkey/nullspace) client
+(© plushmonkey), credited where used. This branch also contains an experimental
+Continuum encryption adapter developed through owner-authorized binary analysis;
+it requires a separately supplied local reference image. No original executable,
+art, sound, or server key cache is distributed.
+
+**Continuum encryption review:** start with the
+[Claude/reviewer handoff](docs/research/continuum/REVIEW_HANDOFF.md).
+Working local login is verified, but this branch is not yet a self-contained
+production implementation of key expansion.
 
 ## Run
 

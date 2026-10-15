@@ -1,0 +1,90 @@
+{
+  "evidence_id": "ev_4e091f2f564d8cb5c89d04d3d599f71b10afb1ac308c8d891b59e426d0e2e364",
+  "subject": {
+    "name": "Continuum.exe",
+    "digest": {
+      "sha256": "b059db20b82ddbd41fc47b2122a31a1f1b06c88e81c20649c5dc6f9f2501c16c"
+    },
+    "format": "pe",
+    "architecture": "x86"
+  },
+  "operation": "binary_overview",
+  "normalized_result": {
+    "document": "target-b059db20b82d.exe",
+    "image_base": "0x400000",
+    "segments": [
+      {
+        "name": "Headers",
+        "start": "0x400000",
+        "end": "0x401000",
+        "length": 4096,
+        "image_base": "0x400000",
+        "address_space": "ram"
+      },
+      {
+        "name": "SECTION.0",
+        "start": "0x401000",
+        "end": "0x4a6455",
+        "length": 676949,
+        "image_base": "0x400000",
+        "address_space": "ram"
+      },
+      {
+        "name": "SECTION.1",
+        "start": "0x4a7000",
+        "end": "0x4b74df",
+        "length": 66783,
+        "image_base": "0x400000",
+        "address_space": "ram"
+      },
+      {
+        "name": "SECTION.2",
+        "start": "0x4b8000",
+        "end": "0x4c328c",
+        "length": 45708,
+        "image_base": "0x400000",
+        "address_space": "ram"
+      },
+      {
+        "name": "SECTION.3",
+        "start": "0x4c4000",
+        "end": "0x4c7800",
+        "length": 14336,
+        "image_base": "0x400000",
+        "address_space": "ram"
+      },
+      {
+        "name": ".text",
+        "start": "0x4c8000",
+        "end": "0x52e000",
+        "length": 417792,
+        "image_base": "0x400000",
+        "address_space": "ram"
+      },
+      {
+        "name": "tdb",
+        "start": "0xffdff000",
+        "end": "0xffe00000",
+        "length": 4096,
+        "image_base": "0x400000",
+        "address_space": "ram"
+      }
+    ],
+    "segment_count": 7,
+    "procedure_count": 8,
+    "string_count": 11
+  },
+  "limitations": [
+    "Derived by an REA composed workflow.",
+    "A headless Ghidra session contains exactly one imported Program, unlike Hopper's multi-document GUI session.",
+    "Cancelling an active Ghidra request terminates its ephemeral database and discards session annotations. The selected target remains open; the next provider query imports the original artifact again.",
+    "Charset is reported, while a non-missing terminator cannot distinguish a present terminator from a fixed or Pascal layout.",
+    "Default-space addresses use lowercase 0x-prefixed hexadecimal; other address spaces use <percent-encoded-space>:0x<hex>.",
+    "External functions and local thunks are distinct; procedure metadata identifies both and preserves a thunk target when Ghidra resolves one.",
+    "Memory-block end addresses are exclusive; permissions come from Ghidra MemoryBlock flags rather than inference from section names.",
+    "Only Ghidra-defined string Data is observed; packed or undefined string bytes may be absent. Completeness applies to that inventory, and an empty search does not establish that text is absent from the artifact. If an address is known, use read_bytes and xrefs to inspect bytes and references.",
+    "The imported Program and temporary project are ephemeral and deleted on close. Annotation operations edit session database metadata; original executable bytes are never written.",
+    "The session serves operations only after Ghidra reports default auto-analysis complete; incomplete analysis does not expose partial results.",
+    "macOS sessions require a matching executable Ghidra native decompiler; REA checks for it but does not build native components or change Gatekeeper quarantine state."
+  ]
+}
