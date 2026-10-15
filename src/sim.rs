@@ -379,6 +379,12 @@ impl Ship {
         out
     }
 
+    /// Holds guns and bombs for `ticks` (picking up or throwing a ball).
+    pub fn hold_fire(&mut self, ticks: u32) {
+        self.next_bomb_tick = self.next_bomb_tick.max(self.tick + ticks);
+        self.next_bullet_tick = self.next_bullet_tick.max(self.tick + ticks);
+    }
+
     /// Pays for a weapon that was actually spawned.
     pub fn commit_fire(&mut self, fire: Fire) {
         self.energy -= fire.cost;

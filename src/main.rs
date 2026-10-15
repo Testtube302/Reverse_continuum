@@ -51,6 +51,8 @@ struct Args {
     freq: Option<u16>,
     /// Test aid: attach to this player as a turret ~5 s after getting a ship (like F7).
     attach_to: Option<String>,
+    /// Test aid: press warp (throws a carried ball) once on this frame.
+    throw_after: Option<u32>,
 }
 
 fn parse_args() -> Args {
@@ -74,6 +76,7 @@ fn parse_args() -> Args {
         follow: None,
         freq: None,
         attach_to: None,
+        throw_after: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -108,6 +111,7 @@ fn parse_args() -> Args {
             "--follow" => args.follow = Some(value()),
             "--freq" => args.freq = value().parse().ok(),
             "--attach-to" => args.attach_to = Some(value()),
+            "--throw-after" => args.throw_after = value().parse().ok(),
             "--at" => {
                 let v = value();
                 let (x, y) = v.split_once(',').unwrap_or_else(|| panic!("--at x,y"));
@@ -191,6 +195,7 @@ struct Graphics {
     repel: Sheet,
     spark: Sheet,
     turret: Sheet,
+    ball: Sheet,
     exhaust: Sheet,
     rocket: Sheet,
     portal: Sheet,
@@ -224,6 +229,7 @@ impl Graphics {
             repel: Sheet::load(assets, "repel", 96, 96),
             spark: Sheet::load(assets, "spark", 40, 40),
             turret: Sheet::load(assets, "turret2", 16, 16),
+            ball: Sheet::load(assets, "powerb", 16, 16),
             exhaust: Sheet::load(assets, "exhaust", 16, 16),
             rocket: Sheet::load(assets, "rocket", 24, 24),
             portal: Sheet::load(assets, "warppnt", 16, 16),
@@ -513,9 +519,11 @@ async fn main() {
             }
         }
         // Online --at: place our first ship there (a test aid for reproducible comparisons).
+        // Keep it there for the first 300 frames: a zone may swap our ship (and respawn us) at first.
         if let (Some(at), Some(ship), false) = (args.at, game.ship.as_mut(), placed_at) {
             ship.position = at;
-            placed_at = true;
+            ship.velocity = Vec2::default();
+            placed_at = frame > 300;
         }
         let ship_keys = [KeyCode::Key1, KeyCode::Key2, KeyCode::Key3, KeyCode::Key4, KeyCode::Key5, KeyCode::Key6, KeyCode::Key7, KeyCode::Key8];
         if let Some(i) = ship_keys.iter().position(|k| is_key_pressed(*k)).filter(|_| !typing && !menu_open) {
@@ -590,6 +598,10 @@ async fn main() {
                 }
             } else {
                 let mut input = if typing { Input::default() } else { read_input() };
+                // Held for 20 frames: a frame can pass without a game tick at high frame rates.
+                if args.throw_after.is_some_and(|f| frame >= f && frame < f + 20) {
+                    input.warp = true;
+                }
                 if args.script_fire {
                     input.gun = true;
                     input.bomb = !fire_held;
@@ -646,6 +658,10 @@ async fn main() {
                                 "player {} pid={} ship={} freq={} pos=({:.1},{:.1}) updates={} dead={} attached_to={:?}",
                                 p.name, p.pid, p.ship, p.freq, p.position.x, p.position.y, p.position_updates, p.dead, p.attached_to
                             );
+                        }
+                        for b in &game.soccer.balls {
+                            let at = b.position();
+                            eprintln!("ball {} at ({:.1},{:.1}) state {:?} carrier {} vel ({},{})", b.id, at.x, at.y, b.state, b.carrier, b.vel_x, b.vel_y);
                         }
                         for line in s.log.iter().filter(|l| l.contains("turret")) {
                             eprintln!("{line}");
@@ -719,7 +735,41 @@ fn draw_turrets(gfx: &Graphics, hud: &mut hud::Hud, game: &Game, carrier: u16, a
         gfx.turret.draw_centered(p.direction.min(39) as u32, at.0, at.1);
         let line = first_line + k as u32;
         let label_at = (at.0, at.1 + 12.0 * line as f32);
-        hud.name_label(&p.name, p.bounty, p.flags_carried, p.ping as u32 * 10, view_freq == Some(p.freq), None, label_at);
+        hud.name_label(&p.name, p.bounty, p.flags_carried, game.soccer.carried_by(p.pid).is_some(), p.ping as u32 * 10, view_freq == Some(p.freq), None, label_at);
+    }
+}
+
+/// Powerballs: powerb.png row 0 (one cycle a second), row 1 while "phased" just after a throw or
+/// a touch; a carried ball sits at the carrier's nose (reference client).
+fn draw_balls(gfx: &Graphics, game: &Game, to_screen: &dyn Fn(Vec2) -> (f32, f32)) {
+    let Some(s) = &game.session else { return };
+    let Some((_, settings)) = game.world() else { return };
+    let now = s.server_now();
+    let frame = ((get_time() * 10.0) as u32) % 10;
+    for b in &game.soccer.balls {
+        let mut row = 0;
+        let at = if b.state == aicontinuum::soccer::BallState::Carried {
+            let carrier = if Some(b.carrier) == s.pid {
+                game.ship.as_ref().map(|sh| (sh.position, sh.direction(), sh.ship))
+            } else {
+                s.players.get(&b.carrier).map(|p| (p.position, p.direction, p.ship))
+            };
+            let Some((pos, dir, ship)) = carrier.filter(|c| c.2 < 8) else { continue };
+            let h = aicontinuum::sim::heading(dir);
+            let ext = (settings.ships[ship as usize].radius_tiles() - 0.25).max(0.0);
+            Vec2::new(pos.x + h.x * ext, pos.y + h.y * ext)
+        } else {
+            let since_touch = now.wrapping_sub(b.last_touch);
+            if since_touch < 40 {
+                continue; // About to be picked up: hidden until the zone answers.
+            }
+            if now.wrapping_sub(b.last_fire) < settings.pass_delay || since_touch < 100 {
+                row = 10;
+            }
+            b.position()
+        };
+        let (x, y) = to_screen(at);
+        gfx.ball.draw_centered(row + frame, x, y);
     }
 }
 
@@ -829,6 +879,7 @@ fn draw_world(game: &Game, tiles: &Tiles, gfx: &Graphics, hud: &mut hud::Hud) {
         let (x, y) = to_screen(w.position);
         draw_weapon(gfx, w, x, y);
     }
+    draw_balls(gfx, game, &to_screen);
 
     if let Some(s) = &game.session {
         let view_freq = view_freq(game);
@@ -848,7 +899,7 @@ fn draw_world(game: &Game, tiles: &Tiles, gfx: &Graphics, hud: &mut hud::Hud) {
                 .energy_tick
                 .filter(|t| now.wrapping_sub(*t) < 300)
                 .map(|_| (p.energy, _settings.ships[p.ship as usize].initial_energy));
-            hud.name_label(&p.name, p.bounty, p.flags_carried, p.ping as u32 * 10, view_freq == Some(p.freq), energy, (x, y));
+            hud.name_label(&p.name, p.bounty, p.flags_carried, game.soccer.carried_by(p.pid).is_some(), p.ping as u32 * 10, view_freq == Some(p.freq), energy, (x, y));
             draw_turrets(gfx, hud, game, p.pid, (x, y), view_freq, 1);
         }
     }
@@ -865,6 +916,10 @@ fn draw_world(game: &Game, tiles: &Tiles, gfx: &Graphics, hud: &mut hud::Hud) {
         if let Some(pid) = game.session.as_ref().and_then(|s| s.pid) {
             let low = ship.energy * 2.0 < ship.max_energy as f32;
             draw_turrets(gfx, hud, game, pid, (x, y), view_freq(game), if low { 2 } else { 1 });
+        }
+        // Carrying a ball with a throw timer: seconds left in red where our label would be.
+        if let Some(t) = game.carry_ticks {
+            hud.text(&format!("{:.1}", t as f32 / 100.0), hud::TextColor::Red, x + 14.0, y + 14.0);
         }
         // Riding as a turret, our energy goes one line below the carrier's label.
         let line = if riding { 12.0 } else { 0.0 };
@@ -892,6 +947,11 @@ fn draw_world(game: &Game, tiles: &Tiles, gfx: &Graphics, hud: &mut hud::Hud) {
             EffectKind::ShipExplosion => &gfx.explode1,
             EffectKind::Warp => &gfx.warp,
             EffectKind::Repel => &gfx.repel,
+            EffectKind::BallTrail => {
+                // powerb.png row 2, ten frames over the trail's life.
+                gfx.ball.draw_centered(20 + (e.age * 10 / e.kind.duration()).min(9), x, y);
+                continue;
+            }
             EffectKind::EmpSpark => &gfx.spark,
         };
         let n = sheet.frame_count();

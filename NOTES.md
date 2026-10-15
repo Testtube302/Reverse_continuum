@@ -81,6 +81,22 @@
       the "T" marker (spectate.gif frame 3; 4 = ticked turret) and shows no label for its own
       turret; when the original attached to us, our view put its label a line below ours.
       Turret sprite visibility on the carrier not verified (small dark sprite).
+      Round 18: powerballs (src/soccer.rs, rules from nullspace). S2C 0x2E is 16 bytes: id,
+      x, y (px), vx, vy (px per 10 s), owner, u32 timestamp @12 (0 + owner = carried, 0 + no owner
+      = gone). Free balls simulate per tick (pos in px*1000 += vel; friction from 1e6 down by the
+      thrower ship's SoccerBallFriction @+100), bounce off walls, leave powerb.png row-2 trail
+      puffs every 5 ticks; drawn row 0, row 1 when phased (PassDelay @1346 after a throw / 100
+      ticks after a touch), hidden 40 ticks after a touch. Pickup within SoccerBallProximity
+      (+102) sends C2S 0x20 (id, ball timestamp); throwing (gun/bomb unless AllowGuns @1371 /
+      AllowBombs @1370, or warp key, or SoccerBallThrowTimer +98 running out = dropped behind)
+      sends C2S 0x1F (id, x, y, vx, vy, pid, server tick) at SoccerBallSpeed (+104); a ball we
+      threw entering an enemy goal tile (SoccerMode @1372 sides) sends C2S 0x21. Carrier label
+      gets " (Ball)" (dark red for enemies); our throw timer shows in red at +14,+14.
+      Verified on the rig's "pb" arena: the zone logs our pickups and shots and echoes the
+      carried/thrown states; a bot carrying the ball drew identically in both clients. NOT yet
+      verified: where a thrown ball comes to rest vs the original; goal message text (0x0B only
+      logged). Lesson: frames can pass with no game tick, so test aids hold keys for many frames
+      and runs must be long (ball positions are only resent every SendTime=5 s).
       Rig lessons: --screenshot runs exit after --frames (faster than 60 fps) — give a big
       --frames; xdotool focus on our Wine window is unreliable, so use --attach-to NAME / --freq N.
       NOT yet: 
@@ -228,8 +244,9 @@
 - Rig helpers: tools/ref-rig/rx.sh (run in container, optional screenshot → ~/aicontinuum-ref/shots;
   C=aic-wine5 to target the original's container) and crop.sh. Start: `docker start aic-ref aic-wine5`,
   clear /tmp/.X99-lock, start Xvfb :99 x16, zone-restart.sh, then join5.sh in aic-wine5.
-- Next: balls (powerball); then the zone VM (Ryan to confirm) and integration incl. the
-  Continuum-encryption question (see memory: research public docs first, no RE).
+- Next: gameplay items done. Zone VM (Ryan to confirm) and integration incl. the
+  Continuum-encryption question (see memory: research public docs first, no RE). Loose ends:
+  ball rest position vs original, goal message, R rating, turret sprite on carrier.
 - Rig arena gives Warbirds 2 of every item (InitialRepel..InitialPortal).
 - The rig's centre safe zone has wall pieces: bots chasing the original get stuck behind them.
   Move the original into open space first (Up 1.2 s, wait, Down 1.2 s).

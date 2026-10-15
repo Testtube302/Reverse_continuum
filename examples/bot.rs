@@ -6,6 +6,8 @@
 //!          dist:N = chase distance in tiles (default 10),
 //!          every:MS = at most one shot per MS milliseconds, bomb = fire bombs instead of guns,
 //!          flags = collect dropped flags first (then chase),
+//!          ball = fetch the free powerball, carry it to the chase target and throw it (warp key),
+//!          arena:NAME = join that arena,
 //!          watch = report the chase target but don't move,
 //!          freq:N = switch to team N after getting a ship
 
@@ -27,7 +29,7 @@ fn main() {
         server,
         name: name.clone(),
         password: "bot".into(),
-        arena: None,
+        arena: mode.split(',').find_map(|m| m.strip_prefix("arena:")).map(str::to_string),
         map_dir: std::env::temp_dir().join("aicontinuum-bot-maps"),
     })
     .expect("connect");
@@ -50,6 +52,7 @@ fn main() {
     let every: Option<u64> = modes.iter().find_map(|m| m.strip_prefix("every:")).and_then(|d| d.parse().ok());
     let bomb = modes.contains(&"bomb");
     let want_flags = modes.contains(&"flags");
+    let want_ball = modes.contains(&"ball");
     let mut next_shot = Instant::now();
     let mut next_report = Instant::now() + Duration::from_secs(2);
     let mut next_chat = Instant::now() + Duration::from_secs(3);
@@ -80,7 +83,13 @@ fn main() {
             }
         }
         let watch = modes.contains(&"watch");
-        let flag_input = if want_flags { flag_input(&game) } else { None };
+        let flag_input = if want_flags {
+            flag_input(&game)
+        } else if want_ball {
+            ball_input(&game, chase.as_deref(), dist)
+        } else {
+            None
+        };
         let input = match (&chase, flag_input.or_else(|| chase_input(&game, chase.as_deref(), dist))) {
             (Some(_), Some(i)) => i,
             (Some(_), None) => Input::default(),
@@ -149,6 +158,42 @@ fn report_chase(game: &Game, target: &str) {
         dropped,
         s.me().map_or(0, |m| m.flags_carried)
     );
+}
+
+/// Seek steering toward `target` (tiles): wanted velocity points at it and slows on approach.
+fn seek(game: &Game, target: (f32, f32)) -> Option<Input> {
+    let ship = game.ship.as_ref()?;
+    let (dx, dy) = (target.0 - ship.position.x, target.1 - ship.position.y);
+    let dist = (dx * dx + dy * dy).sqrt().max(0.01);
+    let speed = (dist * 1.2).min(6.0);
+    let (ex, ey) = (dx / dist * speed - ship.velocity.x, dy / dist * speed - ship.velocity.y);
+    let err = (ex * ex + ey * ey).sqrt();
+    let want = (ex.atan2(-ey) / std::f32::consts::TAU).rem_euclid(1.0);
+    let diff = (want - ship.orientation + 1.5).rem_euclid(1.0) - 0.5;
+    Some(Input {
+        right: diff > 0.01 && diff < 0.45,
+        left: diff < -0.01 && diff > -0.45,
+        forward: err > 0.3 && diff.abs() < 0.12,
+        backward: err > 0.3 && diff.abs() > 0.38,
+        ..Default::default()
+    })
+}
+
+/// Powerball errand: fetch the free ball, then fly at the target and throw (warp) when close.
+fn ball_input(game: &Game, target: Option<&str>, keep: f32) -> Option<Input> {
+    let ship = game.ship.as_ref()?;
+    let s = game.session.as_ref()?;
+    let me = s.pid?;
+    if game.soccer.carried_by(me).is_some() {
+        let t = s.players.values().find(|p| Some(p.name.as_str()) == target && p.ship < 8 && p.position_updates > 0)?;
+        let (dx, dy) = (t.position.x - ship.position.x, t.position.y - ship.position.y);
+        let mut input = seek(game, (t.position.x, t.position.y))?;
+        input.warp = (dx * dx + dy * dy).sqrt() < keep;
+        return Some(input);
+    }
+    let ball = game.soccer.balls.iter().find(|b| b.state == aicontinuum::soccer::BallState::World)?;
+    let at = ball.position();
+    seek(game, (at.x, at.y))
 }
 
 /// Steering toward the nearest dropped flag, while there is one and we carry fewer than 3.

@@ -9,4 +9,5 @@ pub mod net;
 pub mod prizes;
 pub mod settings;
 pub mod sim;
+pub mod soccer;
 pub mod weapons;

@@ -195,6 +195,8 @@ pub struct Session {
     pub status_bits: u8,
     /// Players seen warping (their position packet had the flash bit), to animate.
     pub warp_flashes: Vec<Vec2>,
+    /// Powerball position packets (S2C 0x2E) for the game to apply.
+    pub ball_packets: Vec<crate::soccer::BallPacket>,
     /// Bricks standing on the map: (tile x, tile y, team, local tick they expire).
     pub bricks: Vec<(u16, u16, u16, u32)>,
     /// Human-readable protocol log for diagnostics.
@@ -233,6 +235,7 @@ impl Session {
             status_bits: 0,
             warp_flashes: Vec::new(),
             bricks: Vec::new(),
+            ball_packets: Vec::new(),
             log: Vec::new(),
             joined: false,
             spectate_at: Vec2::new(512.0, 512.0),
@@ -298,6 +301,36 @@ impl Session {
     /// As a carrier, shakes off all turrets.
     pub fn send_attach_drop(&mut self) {
         self.transport.send_reliable(&[0x14]);
+    }
+
+    /// Server tick now (for ball timestamps).
+    pub fn server_now(&self) -> u32 {
+        self.transport.server_tick()
+    }
+
+    /// Asks to pick up ball `id` (its last timestamp).
+    pub fn send_ball_pickup(&mut self, id: u8, timestamp: u32) {
+        let mut p = vec![0x20, id];
+        p.extend_from_slice(&timestamp.to_le_bytes());
+        self.transport.send_reliable(&p);
+    }
+
+    /// Throws ball `id` from pixel (x, y) with velocity in pixels per 10 s.
+    pub fn send_ball_fire(&mut self, id: u8, x: u16, y: u16, vx: i16, vy: i16, pid: u16, timestamp: u32) {
+        let mut p = vec![0x1F, id];
+        for v in [x, y, vx as u16, vy as u16, pid] {
+            p.extend_from_slice(&v.to_le_bytes());
+        }
+        p.extend_from_slice(&timestamp.to_le_bytes());
+        self.transport.send_reliable(&p);
+    }
+
+    /// Reports our thrown ball reaching an enemy goal tile.
+    pub fn send_ball_goal(&mut self, id: u8, x: i16, y: i16) {
+        let mut p = vec![0x21, id];
+        p.extend_from_slice(&x.to_le_bytes());
+        p.extend_from_slice(&y.to_le_bytes());
+        self.transport.send_reliable(&p);
     }
 
     /// Asks the zone to drop a brick at our tile.
@@ -617,6 +650,13 @@ impl Session {
                 }
             }
             0x21 => self.on_brick(p),
+            0x2E => {
+                if let Some(b) = crate::soccer::BallPacket::parse(p) {
+                    self.ball_packets.push(b);
+                }
+            }
+            // Goal scored (team, points): the original's message for it isn't measured yet.
+            0x0B => self.note(format!("goal by freq {:?}", u16_at(p, 1))),
             // Turret link: requester attached to destination (0xFFFF = detached); a short packet
             // detaches us.
             0x0E => {

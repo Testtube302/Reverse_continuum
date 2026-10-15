@@ -473,14 +473,16 @@ impl Hud {
     /// Flag carriers show "name(bounty:flags)[ping]", dark red for enemies (measured; a team
     /// carrier's colour hasn't been seen yet and stays yellow).
     #[allow(clippy::too_many_arguments)]
-    pub fn name_label(&self, name: &str, bounty: u16, flags: u16, ping_ms: u32, team: bool, energy: Option<(u16, u32)>, center: (f32, f32)) {
-        let color = match (team, flags > 0) {
+    pub fn name_label(&self, name: &str, bounty: u16, flags: u16, ball: bool, ping_ms: u32, team: bool, energy: Option<(u16, u32)>, center: (f32, f32)) {
+        // Enemy flag or ball carriers are dark red; a ball carrier gets " (Ball)" (reference client).
+        let color = match (team, flags > 0 || ball) {
             (true, _) => TextColor::Yellow,
             (false, true) => TextColor::DarkRed,
             (false, false) => TextColor::Blue,
         };
         let bounty = if flags > 0 { format!("{bounty}:{flags}") } else { bounty.to_string() };
-        self.text(&format!("{name}({bounty})[{ping_ms}]"), color, center.0 + 14.0, center.1 + 14.0);
+        let ball = if ball { " (Ball)" } else { "" };
+        self.text(&format!("{name}({bounty})[{ping_ms}]{ball}"), color, center.0 + 14.0, center.1 + 14.0);
         if let Some((energy, initial)) = energy {
             let text = energy.to_string();
             let color = energy_color(energy as u32, initial).unwrap_or(TextColor::Blue);

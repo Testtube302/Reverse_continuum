@@ -71,6 +71,8 @@ pub enum EffectKind {
     Repel,
     /// spark.png, dropped every 15 ticks while EMPed: 10 frames over 0.5 s.
     EmpSpark,
+    /// powerb.png row 2: a moving ball's trail.
+    BallTrail,
 }
 
 impl EffectKind {
@@ -82,6 +84,7 @@ impl EffectKind {
             Self::Warp => WARP_TICKS,
             Self::Repel => 59, // 10 frames at ~59 ms, measured
             Self::EmpSpark => 50,
+            Self::BallTrail => 100,
         }
     }
 }
@@ -208,6 +211,11 @@ pub struct Game {
     pub trails: Vec<TrailDot>,
     pub exhaust: Vec<Exhaust>,
     pub bomb_puffs: Vec<BombPuff>,
+    pub soccer: crate::soccer::Soccer,
+    /// Ticks left before a carried ball throws itself (SoccerBallThrowTimer), and the local tick
+    /// of our last pickup request.
+    pub carry_ticks: Option<u32>,
+    last_pickup: u32,
     thrust_ticks: u32,
     pub sounds: Vec<SoundCue>,
     pub notices: Vec<String>,
@@ -259,6 +267,9 @@ impl Game {
             trails: Vec::new(),
             exhaust: Vec::new(),
             bomb_puffs: Vec::new(),
+            soccer: Default::default(),
+            carry_ticks: None,
+            last_pickup: 0,
             thrust_ticks: 0,
             sounds: Vec::new(),
             notices: Vec::new(),
@@ -383,6 +394,89 @@ impl Game {
         }
     }
 
+    /// Powerball handling for one tick: pick up a free ball within reach, throw a carried one with
+    /// the gun/bomb keys (unless the zone lets those fire normally) or warp, the throw timer, and
+    /// ball physics. Returns the input with any key used for throwing removed.
+    fn tick_ball(&mut self, mut input: Input, map: &Map, settings: &ArenaSettings) -> Input {
+        let Some(s) = self.session.as_ref() else { return input };
+        let Some(me) = s.me().map(|m| m.clone()) else { return input };
+        let server_now = s.server_now();
+        let Some(ship) = self.ship.as_ref() else { return input };
+        let ss = &settings.ships[ship.ship as usize];
+        let (pos, vel, dir) = (ship.position, ship.velocity, ship.direction());
+
+        // Throwing.
+        if let Some(ball) = self.soccer.carried_by(me.pid).copied() {
+            let by_gun = input.gun && !settings.ball_allow_guns;
+            let by_bomb = (input.bomb || input.mine) && !settings.ball_allow_bombs;
+            let timer_out = self.carry_ticks == Some(0);
+            if by_gun || by_bomb || input.warp || timer_out {
+                let h = sim::heading(dir);
+                let speed = ss.soccer_ball_speed as f32 / 160.0;
+                // The throw timer drops the ball behind us (reference client).
+                let sign = if timer_out && !(by_gun || by_bomb || input.warp) { -1.0 } else { 1.0 };
+                let v = Vec2::new(vel.x + h.x * speed * sign, vel.y + h.y * speed * sign);
+                let (vx, vy) = ((v.x * 160.0) as i16, (v.y * 160.0) as i16);
+                if let Some(s) = self.session.as_mut() {
+                    s.send_ball_fire(ball.id, (pos.x * 16.0) as u16, (pos.y * 16.0) as u16, vx, vy, me.pid, server_now);
+                }
+                if let Some(b) = self.soccer.balls.iter_mut().find(|b| b.id == ball.id) {
+                    b.last_fire = server_now;
+                }
+                self.carry_ticks = None;
+                if let Some(sh) = self.ship.as_mut() {
+                    sh.hold_fire(50);
+                }
+                (input.gun, input.bomb, input.mine, input.warp) = (false, false, false, false);
+            } else {
+                self.carry_ticks = self.carry_ticks.map(|t| t.saturating_sub(1));
+                if !settings.ball_allow_guns {
+                    input.gun = false;
+                }
+                if !settings.ball_allow_bombs {
+                    (input.bomb, input.mine) = (false, false);
+                }
+            }
+        } else if me.attached_to.is_none() && now_tick_diff(self.last_pickup) >= 100 {
+            // Picking up: a free ball within SoccerBallProximity pixels, not just thrown/touched.
+            let reach = ss.soccer_ball_proximity as f32 / 16.0;
+            let pass = settings.pass_delay;
+            let ready = |b: &crate::soccer::Ball| {
+                b.state == crate::soccer::BallState::World
+                    && server_now.wrapping_sub(b.last_fire) >= pass
+                    && server_now.wrapping_sub(b.last_touch) >= 100
+                    && !(b.carrier == me.pid && (b.vel_x != 0 || b.vel_y != 0))
+            };
+            if let Some(b) = self.soccer.balls.iter_mut().find(|b| {
+                ready(b) && (b.position().x - pos.x).abs() < reach && (b.position().y - pos.y).abs() < reach
+            }) {
+                b.last_touch = server_now;
+                let (id, ts) = (b.id, b.timestamp);
+                self.last_pickup = crate::net::transport::now_tick();
+                if let Some(s) = self.session.as_mut() {
+                    s.send_ball_pickup(id, ts);
+                }
+            }
+        }
+
+        // Physics, trails, goals.
+        let freq = me.freq;
+        let mode = settings.soccer_mode;
+        for e in self.soccer.tick(map, me.pid, |at| crate::soccer::is_team_goal(at, freq, mode)) {
+            match e {
+                crate::soccer::BallEvent::Trail(at) => {
+                    self.effects.push(Effect { kind: EffectKind::BallTrail, position: at, age: 0 });
+                }
+                crate::soccer::BallEvent::Goal { id, x, y } => {
+                    if let Some(s) = self.session.as_mut() {
+                        s.send_ball_goal(id, x, y);
+                    }
+                }
+            }
+        }
+        input
+    }
+
     /// While attached, sit on the carrier and move with it; a carrier counts its turrets.
     fn follow_carrier(&mut self) -> bool {
         let Some(s) = self.session.as_ref() else { return false };
@@ -449,6 +543,38 @@ impl Game {
                     let fresh = spawn_ship(&map, &settings, sh.ship, seed);
                     sh.position = fresh.position;
                     sh.velocity = Vec2::default();
+                }
+            }
+        }
+        let Some(s) = self.session.as_mut() else { return };
+        let packets: Vec<_> = s.ball_packets.drain(..).collect();
+        if !packets.is_empty() {
+            let server_now = s.server_now();
+            let me = s.pid.unwrap_or(crate::soccer::NO_PLAYER);
+            let ships: std::collections::HashMap<u16, u8> = s.players.values().map(|p| (p.pid, p.ship)).collect();
+            if let Some((map, settings)) = self.world_handles() {
+                let friction = |owner: u16| {
+                    let ship = ships.get(&owner).copied().filter(|&k| k < 8).unwrap_or(0);
+                    settings.ships[ship as usize].soccer_ball_friction as i64
+                };
+                for p in packets {
+                    if std::env::var_os("AIC_DEBUG_BALLS").is_some() {
+                        eprintln!("ballpkt {p:?} server_now {server_now}");
+                    }
+                    let was_ours = self.soccer.carried_by(me).is_some();
+                    self.soccer.apply(p, server_now, friction, &map, me);
+                    let now_ours = self.soccer.carried_by(me).is_some();
+                    if now_ours && !was_ours {
+                        // Picked up: start the throw timer and hold guns/bombs for BombFireDelay.
+                        let kind = self.ship.as_ref().map_or(0, |sh| sh.ship) as usize;
+                        let t = settings.ships[kind].soccer_ball_throw_timer;
+                        self.carry_ticks = (t > 0).then_some(t);
+                        if let Some(sh) = self.ship.as_mut() {
+                            sh.hold_fire(settings.ships[kind].bomb_fire_delay);
+                        }
+                    } else if !now_ours && was_ours {
+                        self.carry_ticks = None;
+                    }
                 }
             }
         }
@@ -556,6 +682,7 @@ impl Game {
             // A turret only turns and fires; it rides at its carrier's position.
             let riding = self.follow_carrier();
             let input = if riding { Input { forward: false, backward: false, afterburner: false, ..input } } else { input };
+            let input = self.tick_ball(input, &map, &settings);
             let ship = self.ship.as_mut().unwrap();
             if ship.tick(&map, &settings, input) {
                 self.sounds.push(SoundCue { name: "bounce".into(), position: ship.position });
@@ -1091,6 +1218,11 @@ impl Game {
             s.send_position(self.ship.as_ref(), fired, dead, false);
         }
     }
+}
+
+/// Ticks since the local tick `then`.
+fn now_tick_diff(then: u32) -> u32 {
+    crate::net::transport::now_tick().wrapping_sub(then)
 }
 
 fn fire_sound(data: WeaponData) -> String {
