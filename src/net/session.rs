@@ -11,6 +11,7 @@ use super::transport::{Event, State, Transport, now_tick};
 use crate::lvl::{Map, crc32};
 use crate::settings::ArenaSettings;
 use crate::sim::{Ship, Vec2};
+use crate::net::vie::VieRng;
 use crate::weapons::{Shooter, WeaponData};
 
 pub const SPECTATOR: u8 = 8;
@@ -162,6 +163,12 @@ pub struct Session {
     pub deaths: Vec<Death>,
     pub prize_events: Vec<PrizeEvent>,
     pub flags: BTreeMap<u16, Flag>,
+    /// Door RNG and the local tick of its last step; set from the server's security packet.
+    doors: Option<(VieRng, u32)>,
+    /// Bumped whenever doors change, so frontends can react (e.g. a door closing on a ship).
+    pub door_generation: u32,
+    /// "X entered arena" / "X left arena" lines for players arriving after we joined.
+    pub arena_messages: Vec<String>,
     /// Human-readable protocol log for diagnostics.
     pub log: Vec<String>,
     pub joined: bool,
@@ -191,6 +198,9 @@ impl Session {
             deaths: Vec::new(),
             prize_events: Vec::new(),
             flags: BTreeMap::new(),
+            doors: None,
+            door_generation: 0,
+            arena_messages: Vec::new(),
             log: Vec::new(),
             joined: false,
             spectate_at: Vec2::new(512.0, 512.0),
@@ -233,6 +243,45 @@ impl Session {
                 Event::Disconnected(why) => self.fail(why),
             }
         }
+        self.update_doors();
+    }
+
+    /// Steps the shared door RNG for every `DoorDelay` that has passed and applies the result.
+    fn update_doors(&mut self) {
+        let (Some(settings), Some((rng, last))) = (self.settings.as_ref(), self.doors.as_mut()) else { return };
+        let Some(map) = self.map.as_mut() else { return };
+        let delay = settings.door_delay.max(1);
+        let elapsed = now_tick().wrapping_sub(*last) as i32;
+        if elapsed < 0 {
+            return;
+        }
+        let steps = elapsed as u32 / delay;
+        if steps == 0 {
+            return;
+        }
+        let mut seed = rng.seed as u8;
+        for _ in 0..steps {
+            seed = match settings.door_mode {
+                -2 => rng.next() as u8,
+                -1 => {
+                    // Seven draws, each contributing one bit (bit 0 also sets bit 4).
+                    let t: [u32; 7] = std::array::from_fn(|_| rng.next());
+                    let bit = |v: u32, mask: u32, out: u8| if (v as i32 & mask as i32) != 0 { out } else { 0 };
+                    bit(t[6], 0xF, 0x80)
+                        + bit(t[5], 7, 0x40)
+                        + bit(t[4], 3, 0x20)
+                        + bit(t[3], 0xF, 0x08)
+                        + bit(t[2], 7, 0x04)
+                        + bit(t[1], 3, 0x02)
+                        + bit(t[0], 1, 0x11)
+                }
+                m if m >= 0 => m as u8,
+                _ => seed,
+            };
+            *last = last.wrapping_add(delay);
+        }
+        Arc::make_mut(map).seed_doors(seed);
+        self.door_generation = self.door_generation.wrapping_add(1);
     }
 
     /// Advances remote players by one 10 ms tick, extrapolating from their last update.
@@ -287,6 +336,13 @@ impl Session {
     /// Requests a ship (0-7) or spectator mode (8).
     pub fn request_ship(&mut self, ship: u8) {
         self.transport.send_reliable(&[0x18, ship]);
+    }
+
+    /// Asks the server to send us `pid`'s positions wherever they are (spectator follow).
+    pub fn send_spectate_request(&mut self, pid: u16) {
+        let mut p = vec![0x08];
+        p.extend_from_slice(&pid.to_le_bytes());
+        self.transport.send_reliable(&p);
     }
 
     /// Asks to pick up a flag we're touching.
@@ -437,6 +493,9 @@ impl Session {
                         flags_carried: u16_at(rec, 61).unwrap_or(0),
                     };
                     self.note(format!("player entered: {} (pid {}, ship {})", pl.name, pl.pid, pl.ship));
+                    if self.joined {
+                        self.arena_messages.push(format!("{} entered arena", pl.name));
+                    }
                     self.players.insert(pl.pid, pl);
                 }
             }
@@ -444,6 +503,7 @@ impl Session {
                 if let Some(pid) = u16_at(p, 1) {
                     if let Some(pl) = self.players.remove(&pid) {
                         self.note(format!("player left: {}", pl.name));
+                        self.arena_messages.push(format!("{} left arena", pl.name));
                     }
                 }
             }
@@ -530,6 +590,11 @@ impl Session {
             0x18 => {
                 if let Some(seed) = u32_at(p, 1) {
                     self.prize_events.push(PrizeEvent::Seed(seed));
+                }
+                if let (Some(door_seed), Some(ts)) = (u32_at(p, 5), u32_at(p, 9)) {
+                    let local = (ts as i64 - self.transport.time_diff as i64) as u32 & 0x7FFF_FFFF;
+                    self.doors = Some((VieRng::new(door_seed), local));
+                    self.update_doors();
                 }
                 let key = u32_at(p, 13).unwrap_or(0);
                 if key != 0 {

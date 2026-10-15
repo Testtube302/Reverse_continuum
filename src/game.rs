@@ -15,6 +15,8 @@ use crate::weapons::{ExplosionKind, Shooter, Target, WeaponData, WeaponEvent, We
 pub const SHIP_EXPLOSION_TICKS: u32 = 80;
 pub const BULLET_EXPLOSION_TICKS: u32 = 40;
 pub const BOMB_EXPLOSION_TICKS: u32 = 125;
+/// How long centre-screen messages stay up. TODO: measure the original's duration.
+pub const CENTER_MESSAGE_TICKS: u32 = 1000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EffectKind {
@@ -64,6 +66,12 @@ pub struct Game {
     /// Spectator camera when not in a ship.
     pub camera: Vec2,
     pub kills: u32,
+    /// While spectating, keep the camera on this player.
+    pub follow: Option<String>,
+    seen_door_generation: u32,
+    followed_pid: Option<u16>,
+    /// Centre-screen messages and their age in frames.
+    pub center_messages: Vec<(String, u32)>,
     pub deaths: u32,
     rng: u32,
 }
@@ -101,6 +109,10 @@ impl Game {
             // Spectators start at the map's top-left corner, as in the original.
             camera: Vec2::new(0.0, 0.0),
             kills: 0,
+            follow: None,
+            seen_door_generation: 0,
+            followed_pid: None,
+            center_messages: Vec::new(),
             deaths: 0,
             rng: 0x1234_5678,
         }
@@ -168,6 +180,44 @@ impl Game {
                 s.prize_events.remove(i);
             } else {
                 i += 1;
+            }
+        }
+        // A door closing on our ship sends it back to a spawn point, as in the original.
+        if s.door_generation != self.seen_door_generation {
+            self.seen_door_generation = s.door_generation;
+            let blocked = match (&self.ship, s.map.as_ref(), s.settings.as_ref()) {
+                (Some(sh), Some(map), Some(set)) if self.dead_ticks == 0 => {
+                    !map.can_fit(sh.position.x, sh.position.y, set.ships[sh.ship as usize].radius_tiles())
+                }
+                _ => false,
+            };
+            if blocked {
+                let seed = self.random(u32::MAX);
+                let s = self.session.as_ref().unwrap();
+                let (map, settings) = (s.map.clone().unwrap(), s.settings.clone().unwrap());
+                if let Some(sh) = self.ship.as_mut() {
+                    let fresh = spawn_ship(&map, &settings, sh.ship, seed);
+                    sh.position = fresh.position;
+                    sh.velocity = Vec2::default();
+                }
+            }
+        }
+        let Some(s) = self.session.as_mut() else { return };
+        for m in s.arena_messages.drain(..) {
+            self.center_messages.push((m, 0));
+        }
+        if self.ship.is_none() {
+            if let Some(name) = &self.follow {
+                if let Some(p) = s.players.values().find(|p| &p.name == name) {
+                    let pid = p.pid;
+                    if p.position_updates > 0 {
+                        self.camera = p.position;
+                    }
+                    if self.followed_pid != Some(pid) && s.ready() {
+                        self.followed_pid = Some(pid);
+                        s.send_spectate_request(pid);
+                    }
+                }
             }
         }
         let Some(me) = s.me().map(|m| m.ship) else { return };
@@ -320,6 +370,10 @@ impl Game {
             e.age += 1;
         }
         self.effects.retain(|e| e.age < e.kind.duration());
+        for m in &mut self.center_messages {
+            m.1 += 1;
+        }
+        self.center_messages.retain(|m| m.1 < CENTER_MESSAGE_TICKS);
         fired
     }
 

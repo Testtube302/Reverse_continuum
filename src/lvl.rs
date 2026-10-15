@@ -108,6 +108,26 @@ impl Map {
         tile_is_solid(self.tile(x, y))
     }
 
+    /// Sets every door from an 8-bit pattern: door type 162+n is closed when bit n is set,
+    /// otherwise it becomes tile 170 (open, passable, not drawn).
+    pub fn seed_doors(&mut self, seed: u8) {
+        let b = seed;
+        let table: [u8; 8] = [
+            if b & 1 != 0 { 0xA2 } else { 0xAA },
+            if b & 2 != 0 { 0xA3 } else { 0xAA },
+            if b & 4 != 0 { 0xA4 } else { 0xAA },
+            if b & 8 != 0 { 0xA5 } else { 0xAA },
+            if b & 0x10 != 0 { 0xA6 } else { 0xAA },
+            if b & 0x20 != 0 { 0xA7 } else { 0xAA },
+            if b & 0x40 != 0 { 0xA8 } else { 0xAA },
+            if b & 0x80 != 0 { 0xA9 } else { 0xAA },
+        ];
+        for i in 0..self.doors.len() {
+            let d = self.doors[i];
+            self.set(d.x as usize, d.y as usize, table[(d.id - FIRST_DOOR) as usize]);
+        }
+    }
+
     /// Security checksum: samples every 31st column of every 32nd row starting at offsets
     /// derived from the key, summing `key ^ tile` for wall tiles (1..=160) and safe zones.
     /// Bricks count as empty. Coordinates wrap like the reference's 16-bit casts.
@@ -164,6 +184,19 @@ pub fn crc32(data: &[u8]) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn doors_open_and_close_by_pattern_bit() {
+        let mut d = Vec::new();
+        d.extend_from_slice(&record(10, 10, 162));
+        d.extend_from_slice(&record(11, 10, 169));
+        let mut map = Map::parse(&d).unwrap();
+        map.seed_doors(0x01);
+        assert_eq!((map.tile(10, 10), map.tile(11, 10)), (162, 170));
+        assert!(map.is_solid(10, 10) && !map.is_solid(11, 10));
+        map.seed_doors(0x80);
+        assert_eq!((map.tile(10, 10), map.tile(11, 10)), (170, 169));
+    }
 
     #[test]
     fn crc32_known_vector() {

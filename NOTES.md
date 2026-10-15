@@ -46,7 +46,13 @@
       Windows clock uses GetTimeZoneInformation. Original's F1 help = 20+ pages of Continuum's own
       prose: DO NOT copy; write our own help text in the same box style (decided 2026-10-15).
       F3/F4/F5/F6 showed no visible change in a quiet arena — test with other players/chat.
-      TODO: help (F1, own text), name-tag toggles, LED rows 1-2 meaning (currently 0),
+      Round 4: F1 help (own text, 3 pages), chat verified vs original with examples/bot fire,chat.
+      Round 5: doors (DoorDelay @1306, DoorMode @1310 signed; door RNG from 0x18 [5..9] +
+      timestamp [9..13]; mode -1 = 7 draws -> bits; tile 170 = open) — 3 paired captures matched
+      the original. --follow NAME spectates a player (C2S 0x08 spectate request) → identical
+      framing for whole-screen diffs. "X entered/left arena" centre messages at (sw/6, sh*0.6) in
+      Blue (duration TODO: measure, using 10 s). Players with no position yet are not drawn.
+      TODO:, name-tag toggles, LED rows 1-2 meaning (currently 0),
       bg sparkle objects (bg01-14), door animation, flags, LVZ, in-ship full-screen diff with
       matched state (original's ship had multiprize upgrades), Windows clock offset (uses `date`).
 

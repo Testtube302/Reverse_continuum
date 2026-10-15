@@ -148,6 +148,11 @@ impl Hud {
         }
         self.radar(game, sw, sh);
         self.chat(game, sw, sh);
+        // Centre message area: arena enter/leave lines at (sw/6, sh*0.6), newest at the bottom.
+        let (cx, cy) = ((sw / 6.0).floor(), (sh * 0.6).floor());
+        for (i, (text, _)) in game.center_messages.iter().enumerate() {
+            self.text(text, TextColor::Blue, cx, cy + i as f32 * FONT_H);
+        }
     }
 
     /// Top-right status panel and energy digits, and the energy bar under the health-bar frame.

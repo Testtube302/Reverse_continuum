@@ -114,6 +114,10 @@ pub struct ArenaSettings {
     pub map_zoom_factor: u32,
     /// 0 = flags can't be carried; 1 = unlimited; n = up to n-1.
     pub carry_flags: u32,
+    /// Ticks between door changes.
+    pub door_delay: u32,
+    /// -2 = random per step, -1 = weighted random, >= 0 = fixed door pattern.
+    pub door_mode: i32,
     pub death_prize_time: u32,
     pub prize_factor: u32,
     pub prize_delay: u32,
@@ -248,6 +252,8 @@ impl ArenaSettings {
             engine_shutdown_time: u16_at(p, 1266),
             map_zoom_factor: u16_at(p, 1274),
             carry_flags: u8_at(p, 1384),
+            door_delay: u16_at(p, 1306),
+            door_mode: u16_at(p, 1310) as u16 as i16 as i32,
             prize_factor: u16_at(p, 1292),
             prize_delay: u16_at(p, 1294),
             minimum_virtual: u16_at(p, 1296),
@@ -367,6 +373,8 @@ impl Default for ArenaSettings {
             engine_shutdown_time: 300,
             map_zoom_factor: 8,
             carry_flags: 1,
+            door_delay: 1000,
+            door_mode: -1,
             prize_factor: 1500,
             prize_delay: 1000,
             minimum_virtual: 300,

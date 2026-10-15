@@ -43,6 +43,8 @@ struct Args {
     statbox: bool,
     /// Start with this F1 help page open.
     help: Option<usize>,
+    /// Spectate following this player's ship.
+    follow: Option<String>,
 }
 
 fn parse_args() -> Args {
@@ -62,6 +64,7 @@ fn parse_args() -> Args {
         menu: false,
         statbox: false,
         help: None,
+        follow: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -92,6 +95,7 @@ fn parse_args() -> Args {
             "--menu" => args.menu = true,
             "--statbox" => args.statbox = true,
             "--help-page" => args.help = value().parse().ok(),
+            "--follow" => args.follow = Some(value()),
             "--at" => {
                 let v = value();
                 let (x, y) = v.split_once(',').unwrap_or_else(|| panic!("--at x,y"));
@@ -361,6 +365,7 @@ async fn main() {
         }
     };
 
+    game.follow = args.follow.clone();
     let mut tiles: Option<Tiles> = None;
     let mut requested_initial_ship = false;
     let mut accumulator = 0.0f32;
@@ -632,7 +637,7 @@ fn draw_world(game: &Game, tiles: &Tiles, gfx: &Graphics, hud: &mut hud::Hud) {
 
     if let Some(s) = &game.session {
         for p in s.players.values() {
-            if Some(p.pid) == s.pid || p.ship >= 8 || p.dead {
+            if Some(p.pid) == s.pid || p.ship >= 8 || p.dead || p.position_updates == 0 {
                 continue;
             }
             let (x, y) = to_screen(p.position);
