@@ -15,8 +15,8 @@ use crate::weapons::{ExplosionKind, Shooter, Target, WeaponData, WeaponEvent, We
 pub const SHIP_EXPLOSION_TICKS: u32 = 80;
 pub const BULLET_EXPLOSION_TICKS: u32 = 40;
 pub const BOMB_EXPLOSION_TICKS: u32 = 125;
-/// How long centre-screen messages stay up. TODO: measure the original's duration.
-pub const CENTER_MESSAGE_TICKS: u32 = 1000;
+/// How long centre-screen messages stay up (measured from the original: ~4 s).
+pub const CENTER_MESSAGE_TICKS: u32 = 400;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EffectKind {
@@ -70,6 +70,7 @@ pub struct Game {
     pub follow: Option<String>,
     seen_door_generation: u32,
     followed_pid: Option<u16>,
+    follow_released: bool,
     /// Centre-screen messages and their age in frames.
     pub center_messages: Vec<(String, u32)>,
     pub deaths: u32,
@@ -112,6 +113,7 @@ impl Game {
             follow: None,
             seen_door_generation: 0,
             followed_pid: None,
+            follow_released: false,
             center_messages: Vec::new(),
             deaths: 0,
             rng: 0x1234_5678,
@@ -209,13 +211,19 @@ impl Game {
         if self.ship.is_none() {
             if let Some(name) = &self.follow {
                 if let Some(p) = s.players.values().find(|p| &p.name == name) {
-                    let pid = p.pid;
-                    if p.position_updates > 0 {
+                    let (pid, seen) = (p.pid, p.position_updates > 0);
+                    if seen {
                         self.camera = p.position;
                     }
-                    if self.followed_pid != Some(pid) && s.ready() {
+                    // A spectate request gets us the target's position wherever it is, but this
+                    // server then relays only that player. Once we know where it is, cancel it
+                    // and rely on proximity: our reported position is the camera, on the target.
+                    if self.followed_pid != Some(pid) && s.ready() && !seen {
                         self.followed_pid = Some(pid);
                         s.send_spectate_request(pid);
+                    } else if self.followed_pid == Some(pid) && seen && !self.follow_released {
+                        self.follow_released = true;
+                        s.send_spectate_request(0xFFFF);
                     }
                 }
             }

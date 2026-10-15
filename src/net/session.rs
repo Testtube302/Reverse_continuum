@@ -92,6 +92,10 @@ pub struct Player {
     pub direction: u8,
     pub bounty: u16,
     pub energy: u16,
+    /// Latency in 10 ms units, as relayed in position packets.
+    pub ping: u8,
+    /// Local tick when `energy` last arrived as extra position data.
+    pub energy_tick: Option<u32>,
     /// Low 16 bits of the server timestamp of the last position update.
     last_timestamp: Option<u16>,
     pub position_updates: u32,
@@ -487,6 +491,8 @@ impl Session {
                         direction: 0,
                         bounty: 0,
                         energy: 0,
+                        ping: 0,
+                        energy_tick: None,
                         last_timestamp: None,
                         position_updates: 0,
                         dead: false,
@@ -723,9 +729,11 @@ impl Session {
         pl.position = Vec2::new(u16_at(p, 4).unwrap() as f32 / 16.0, u16_at(p, 15).unwrap() as f32 / 16.0);
         pl.velocity = Vec2::new(i16_at(p, 10).unwrap() as f32 / 160.0, i16_at(p, 6).unwrap() as f32 / 160.0);
         pl.bounty = u16_at(p, 17).unwrap();
+        pl.ping = p[14];
         pl.position_updates += 1;
         if p.len() >= 23 {
             pl.energy = u16_at(p, 21).unwrap();
+            pl.energy_tick = Some(now_tick());
         }
     }
 
@@ -741,9 +749,14 @@ impl Session {
         pl.dead = false;
         pl.direction = p[1];
         pl.bounty = p[7] as u16;
+        pl.ping = p[6];
         pl.position = Vec2::new(u16_at(p, 4).unwrap() as f32 / 16.0, u16_at(p, 12).unwrap() as f32 / 16.0);
         pl.velocity = Vec2::new(i16_at(p, 14).unwrap() as f32 / 160.0, i16_at(p, 10).unwrap() as f32 / 160.0);
         pl.position_updates += 1;
+        if p.len() >= 18 {
+            pl.energy = u16_at(p, 16).unwrap();
+            pl.energy_tick = Some(now_tick());
+        }
     }
 
     pub fn disconnect(&mut self) {

@@ -52,6 +52,13 @@
       the original. --follow NAME spectates a player (C2S 0x08 spectate request) → identical
       framing for whole-screen diffs. "X entered/left arena" centre messages at (sw/6, sh*0.6) in
       Blue (duration TODO: measure, using 10 s). Players with no position yet are not drawn.
+      Round 6: centre messages last ~4 s (measured: 400 ticks). Ship labels match the original
+      (pixel diff = live values only): "name(bounty)[ping*10]" at ship centre +14,+14, yellow if
+      same freq as the viewer (spectators: the followed player's freq), else blue; energy (extra
+      position data, shown 3 s) right-aligned ending at centre.x-22, Blue / Yellow <1/2 / DarkRed
+      <1/4 of InitialEnergy. --follow: spectate request (0x08) only until the target's first
+      position, then cancel (0xFFFF) — SS.NET relays only the spectated player otherwise.
+      examples/bot chase:NAME steers at a player and fires. AIC_DEBUG_PLAYERS=1 dumps players.
       TODO:, name-tag toggles, LED rows 1-2 meaning (currently 0),
       bg sparkle objects (bg01-14), door animation, flags, LVZ, in-ship full-screen diff with
       matched state (original's ship had multiprize upgrades), Windows clock offset (uses `date`).

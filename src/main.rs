@@ -366,6 +366,9 @@ async fn main() {
     };
 
     game.follow = args.follow.clone();
+    if let (Some(at), true) = (args.at, game.session.is_some()) {
+        game.camera = at; // online: initial spectator camera
+    }
     let mut tiles: Option<Tiles> = None;
     let mut requested_initial_ship = false;
     let mut accumulator = 0.0f32;
@@ -526,6 +529,17 @@ async fn main() {
         }
         if let Some((path, frames)) = &args.screenshot {
             if frame >= *frames {
+                if std::env::var_os("AIC_DEBUG_PLAYERS").is_some() {
+                    if let Some(s) = &game.session {
+                        for p in s.players.values() {
+                            eprintln!(
+                                "player {} pid={} ship={} freq={} pos=({:.1},{:.1}) updates={} dead={}",
+                                p.name, p.pid, p.ship, p.freq, p.position.x, p.position.y, p.position_updates, p.dead
+                            );
+                        }
+                        eprintln!("camera=({:.1},{:.1}) spectate_at=({:.1},{:.1})", game.camera.x, game.camera.y, s.spectate_at.x, s.spectate_at.y);
+                    }
+                }
                 get_screen_data().export_png(&path.to_string_lossy());
                 println!("saved {}", path.display());
                 break;
@@ -636,14 +650,24 @@ fn draw_world(game: &Game, tiles: &Tiles, gfx: &Graphics, hud: &mut hud::Hud) {
     }
 
     if let Some(s) = &game.session {
+        // Teams are judged from the viewer's side; a spectator sees through the followed player.
+        let followed = game.follow.as_ref().and_then(|n| s.players.values().find(|p| &p.name == n));
+        let view_freq = match (game.ship.is_none(), followed) {
+            (true, Some(f)) => Some(f.freq),
+            _ => s.me().map(|m| m.freq),
+        };
+        let now = aicontinuum::net::transport::now_tick();
         for p in s.players.values() {
             if Some(p.pid) == s.pid || p.ship >= 8 || p.dead || p.position_updates == 0 {
                 continue;
             }
             let (x, y) = to_screen(p.position);
             gfx.ships.draw_centered(p.ship as u32 * 40 + p.direction.min(39) as u32, x, y);
-            let team = s.me().is_some_and(|m| m.freq == p.freq);
-            hud.name_label(&p.name, p.bounty, team, (x, y));
+            let energy = p
+                .energy_tick
+                .filter(|t| now.wrapping_sub(*t) < 300)
+                .map(|_| (p.energy, _settings.ships[p.ship as usize].initial_energy));
+            hud.name_label(&p.name, p.bounty, p.ping as u32 * 10, view_freq == Some(p.freq), energy, (x, y));
         }
     }
 

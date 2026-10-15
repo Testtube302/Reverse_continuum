@@ -1,7 +1,8 @@
 //! Headless test pilot: joins a zone and flies circles near the map centre.
 //! Usage: cargo run --example bot -- 127.0.0.1:5000 [name] [seconds] [ship] [modes]
 //!   modes: comma-separated; fire = hold the gun, still = sit still (a target),
-//!          chat = say something in public chat every 3 seconds
+//!          chat = say something in public chat every 3 seconds,
+//!          chase:NAME = steer toward player NAME, keep ~10 tiles away and fire when lined up
 
 use std::time::{Duration, Instant};
 
@@ -37,6 +38,7 @@ fn main() {
         Input { forward: true, right: true, gun: modes.contains(&"fire"), ..Default::default() }
     };
     let chat = modes.contains(&"chat");
+    let chase = modes.iter().find_map(|m| m.strip_prefix("chase:")).map(str::to_string);
     let mut next_chat = Instant::now() + Duration::from_secs(3);
     let mut said = 0u32;
     while Instant::now() < end {
@@ -50,6 +52,11 @@ fn main() {
             game.request_ship(ship_type);
             println!("{name}: in arena, requesting ship {ship_type}");
         }
+        let input = match (&chase, chase_input(&game, chase.as_deref())) {
+            (Some(_), Some(i)) => i,
+            (Some(_), None) => Input::default(),
+            _ => input,
+        };
         while Instant::now() >= next_tick {
             let fired = game.tick(input);
             if fired.0 != 0 {
@@ -74,4 +81,26 @@ fn main() {
     if let Some(s) = game.session.as_mut() {
         s.disconnect();
     }
+}
+
+/// Steering toward a named player: turn to face them, thrust when far, back off when close,
+/// and fire when roughly lined up.
+fn chase_input(game: &Game, target: Option<&str>) -> Option<Input> {
+    let target = target?;
+    let ship = game.ship.as_ref()?;
+    let s = game.session.as_ref()?;
+    let t = s.players.values().find(|p| p.name == target && p.ship < 8 && !p.dead && p.position_updates > 0)?;
+    let (dx, dy) = (t.position.x - ship.position.x, t.position.y - ship.position.y);
+    let dist = (dx * dx + dy * dy).sqrt();
+    // Orientation 0 = up, increasing clockwise, in turns.
+    let want = (dx.atan2(-dy) / std::f32::consts::TAU).rem_euclid(1.0);
+    let diff = (want - ship.orientation + 1.5).rem_euclid(1.0) - 0.5;
+    Some(Input {
+        right: diff > 0.01,
+        left: diff < -0.01,
+        forward: dist > 12.0,
+        backward: dist < 7.0,
+        gun: diff.abs() < 0.04 && dist < 30.0,
+        ..Default::default()
+    })
 }

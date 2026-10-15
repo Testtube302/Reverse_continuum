@@ -422,10 +422,22 @@ impl Hud {
         }
     }
 
-    /// "name(bounty)" at the lower right of a ship; team yellow, enemies blue.
-    pub fn name_label(&self, name: &str, bounty: u16, team: bool, ship_screen: (f32, f32)) {
+    /// "name(bounty)[ping ms]" 14 px right/down of the ship's centre (team yellow, enemies blue),
+    /// plus the ship's energy right-aligned to its left when the zone has sent it recently.
+    pub fn name_label(&self, name: &str, bounty: u16, ping_ms: u32, team: bool, energy: Option<(u16, u32)>, center: (f32, f32)) {
         let color = if team { TextColor::Yellow } else { TextColor::Blue };
-        self.text(&format!("{name}({bounty})"), color, ship_screen.0 + 18.0, ship_screen.1 + 18.0);
+        self.text(&format!("{name}({bounty})[{ping_ms}]"), color, center.0 + 14.0, center.1 + 14.0);
+        if let Some((energy, initial)) = energy {
+            let text = energy.to_string();
+            let color = if (energy as u32) * 4 < initial {
+                TextColor::DarkRed
+            } else if (energy as u32) * 2 < initial {
+                TextColor::Yellow
+            } else {
+                TextColor::Blue
+            };
+            self.text(&text, color, center.0 - 22.0 - text.len() as f32 * FONT_W, center.1 + 14.0);
+        }
     }
 }
 
