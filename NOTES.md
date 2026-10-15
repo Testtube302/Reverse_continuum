@@ -24,7 +24,20 @@
       C2S 0x05, S2C 0x06 deaths, enter delay respawn), prizes.rs (seeded green spawning in
       lockstep, pickup C2S 0x07, S2C 0x08/0x20, all 28 prize effects, death greens, sharing),
       sounds (all 75 .wa2 decode; examples/sound_check.rs). Live test: server-confirmed kill.
-      NOT yet: usable items (repel/burst/decoy/thor/brick/rocket/portal/warp key), stealth/
+      Round 13 (2026-10-15): repel, burst, decoy, thor usable (keys Shift+Ctrl, Shift+Del, F5,
+      F6). Rules from nullspace (MIT): items cost no energy, hold guns/bombs for BombFireDelay,
+      repel has its own 50-tick delay (bursts/thors/decoys start it too), count not used up in
+      safe zones; burst = BurstShrapnel pieces in a ring from rest at BurstSpeed, harmless until
+      their first wall bounce, damage BurstDamageLevel; repel acts once: enemy weapons in the
+      +-RepelDistance square fly away at RepelSpeed (mines become bombs), our ship too (unless in
+      safe) and may exceed top speed for RepelTime; decoy = shooter's ship sprite/direction with
+      the shooter's velocity, DecoyAliveTime. Compared with the original firing each item:
+      decoy/thor/repel look the same; repel.png 10 frames at ~59 ms (measured); burst pieces =
+      bullets.png 16-19, 24 of them, with trails in their own blue fade (measured); left item
+      column count boxes from icondoor.png row 0 at (24, y+6) — now 1 px off the original.
+      Rig: arenas/(default)/arena.conf [Warbird] has InitialRepel/Burst/Decoy/Thor=2 (backup
+      /work/arena.conf.bak-r13 in aic-ref).
+      NOT yet: rocket, brick, portal, warp, stealth/
       cloak/xradar/antiwarp effects, EMP shutdown, arena spawn settings, attach/turrets,
       flags/balls, score packets.
 - [x] M4 UI (look-matching done 2026-10-15, leftovers listed in round 12): hud.rs + main.rs draw the HUD, radar, chat, Esc menu, map objects,
@@ -169,8 +182,8 @@
 - Rig helpers: tools/ref-rig/rx.sh (run in container, optional screenshot → ~/aicontinuum-ref/shots;
   C=aic-wine5 to target the original's container) and crop.sh. Start: `docker start aic-ref aic-wine5`,
   clear /tmp/.X99-lock, start Xvfb :99 x16, zone-restart.sh, then join5.sh in aic-wine5.
-- Next: gameplay items (M3 leftovers): usable items (repel, burst, decoy, thor, brick, rocket,
-  portal, warp), stealth/cloak/xradar/antiwarp, EMP shutdown, attach/turrets, balls, scores.
+- Next: rocket, brick, portal, warp; then stealth/cloak/xradar/antiwarp, EMP shutdown,
+  attach/turrets, balls, scores.
 - The rig's centre safe zone has wall pieces: bots chasing the original get stuck behind them.
   Move the original into open space first (Up 1.2 s, wait, Down 1.2 s).
 - After a help capture the original is left with an F1 page open: press F1 until it closes.

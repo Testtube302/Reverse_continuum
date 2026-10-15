@@ -66,6 +66,10 @@ pub struct Input {
     pub gun: bool,
     pub bomb: bool,
     pub mine: bool,
+    pub repel: bool,
+    pub burst: bool,
+    pub decoy: bool,
+    pub thor: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -95,6 +99,9 @@ pub struct Ship {
     pub super_ticks: u32,
     pub shield_ticks: u32,
     pub shutdown_ticks: u32,
+    /// Ticks left during which a repel lets us go faster than our top speed (up to RepelSpeed).
+    pub repel_ticks: u32,
+    next_repel_tick: u32,
     tick: u32,
     last_bounce_tick: Option<u32>,
     next_bullet_tick: u32,
@@ -155,6 +162,8 @@ impl Ship {
             last_bounce_tick: None,
             next_bullet_tick: 0,
             next_bomb_tick: 0,
+            repel_ticks: 0,
+            next_repel_tick: 0,
         }
     }
 
@@ -214,10 +223,32 @@ impl Ship {
             }
         }
 
+        // Items (last one pressed wins, as in the reference client): they cost no energy but
+        // hold off guns and bombs for BombFireDelay; repel has its own 50-tick delay.
+        const REPEL_DELAY_TICKS: u32 = 50;
+        let mut item = None;
+        let mut use_item = |this: &mut Self, idx: usize, kind: WeaponKind, gate: bool| {
+            if gate && this.items[idx] > 0 {
+                this.next_bomb_tick = this.next_bomb_tick.max(now + s.bomb_fire_delay);
+                this.next_bullet_tick = this.next_bullet_tick.max(now + s.bomb_fire_delay);
+                this.next_repel_tick = now + REPEL_DELAY_TICKS;
+                fire = Some(Fire { data: WeaponData::new(kind, 0), cost: 0.0 });
+                item = Some(idx);
+            }
+        };
+        let (repel_ready, bomb_ready) = (ready(self.next_repel_tick), ready(self.next_bomb_tick));
+        use_item(self, 0, WeaponKind::Repel, input.repel && repel_ready);
+        use_item(self, 1, WeaponKind::Burst, input.burst && bomb_ready);
+        use_item(self, 3, WeaponKind::Thor, input.thor && bomb_ready && can_fast_shoot);
+        use_item(self, 2, WeaponKind::Decoy, input.decoy && bomb_ready);
+
         let fire = fire?;
         if in_safe {
             self.velocity = Vec2::default();
             return None;
+        }
+        if let Some(idx) = item {
+            self.items[idx] -= 1;
         }
         Some(fire)
     }
@@ -275,7 +306,11 @@ impl Ship {
         }
         self.thrusting = thrusting;
 
-        let speed = if afterburner { s.maximum_speed } else { self.speed };
+        let mut speed = if afterburner { s.maximum_speed } else { self.speed };
+        if self.repel_ticks > 0 {
+            self.repel_ticks -= 1;
+            speed = speed.max(settings.repel_speed);
+        }
         let max = speed as f32 / 10.0 / 16.0;
         let len = self.velocity.length();
         if len > max {
@@ -481,6 +516,29 @@ mod tests {
         let mut s2 = s.clone();
         s2.tick = 1000;
         assert!(s2.try_fire(Input { bomb: true, ..Default::default() }, &settings, false).is_none());
+    }
+
+    #[test]
+    fn items_fire_once_per_delay_and_use_up_the_count() {
+        let settings = ArenaSettings::default();
+        let mut ship = Ship::new(0, Vec2::new(512.0, 512.0), &settings);
+        ship.items = [1, 2, 0, 0, 0, 0, 0];
+        let burst = Input { burst: true, ..Default::default() };
+        let f = ship.try_fire(burst, &settings, false).unwrap();
+        assert_eq!((f.data.kind(), f.cost, ship.items[1]), (WeaponKind::Burst, 0.0, 1));
+        assert!(ship.try_fire(burst, &settings, false).is_none(), "bomb delay holds the next one");
+        let repel = Input { repel: true, ..Default::default() };
+        assert!(ship.try_fire(repel, &settings, false).is_none(), "a burst also starts the repel delay");
+        for _ in 0..60 {
+            ship.tick(&crate::lvl::Map::empty(), &settings, Input::default());
+        }
+        assert_eq!(ship.try_fire(repel, &settings, false).unwrap().data.kind(), WeaponKind::Repel);
+        assert_eq!(ship.items[0], 0);
+        let decoy = Input { decoy: true, ..Default::default() };
+        for _ in 0..1000 {
+            ship.tick(&crate::lvl::Map::empty(), &settings, Input::default());
+        }
+        assert!(ship.try_fire(decoy, &settings, false).is_none(), "no decoys");
     }
 
     #[test]

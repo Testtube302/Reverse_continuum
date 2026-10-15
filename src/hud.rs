@@ -242,7 +242,8 @@ impl Hud {
                 self.icon(*icon, 0.0, y);
                 if *count > 1 {
                     let c = (*count).min(10);
-                    blit(&self.icon_counts, Rect::new(c as f32 * 11.0, 0.0, 11.0, 13.0), 23.0, y + 5.0);
+                    // Count box from icondoor.png row 0 at (24, y+6), matched against the original.
+                    blit(&self.icon_counts, Rect::new(c as f32 * 11.0, 0.0, 11.0, 13.0), 24.0, y + 6.0);
                 }
             } else {
                 self.empty_icon(false, 0.0, y);

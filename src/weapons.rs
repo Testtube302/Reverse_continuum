@@ -127,6 +127,11 @@ pub struct Weapon {
     rng_seed: u32,
     link: Option<u32>,
     first_tick: bool,
+    /// Burst pieces only hurt ships after their first wall bounce.
+    pub burst_active: bool,
+    /// A decoy shows the shooter's ship facing this direction (0..40).
+    pub decoy_direction: u8,
+    pub decoy_ship: u8,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -141,6 +146,8 @@ pub enum WeaponEvent {
     Explosion { kind: ExplosionKind, position: Vec2 },
     /// The local ship may take damage from this weapon (direct hit, or a bomb exploding).
     HitLocal(Weapon),
+    /// A repel went off: draw its animation; the game pushes our ship if `pushes_local`.
+    Repel { position: Vec2, pushes_local: Option<Vec2> },
 }
 
 #[derive(PartialEq)]
@@ -169,6 +176,7 @@ impl Weapons {
                 if data.alternate() { settings.mine_alive_time } else { settings.bomb_alive_time }
             }
             WeaponKind::Repel => 1,
+            WeaponKind::Decoy => settings.decoy_alive_time,
             _ => 0,
         }
     }
@@ -217,7 +225,21 @@ impl Weapons {
             WeaponKind::Bomb | WeaponKind::ProximityBomb | WeaponKind::Thor => {
                 spawn(self, shooter.x, shooter.y, h, None, &mut events);
             }
-            // Repel, burst, decoy and other items arrive with the prize system.
+            WeaponKind::Burst => {
+                // BurstShrapnel pieces evenly around the ship (the orientation in 1/1000 degrees).
+                let count = ship.burst_shrapnel.max(1) as i32;
+                for i in 0..count {
+                    let deg = ((i * 40000) / count * 9) as f32 / 1000.0;
+                    let dir = Vec2::new(deg.to_radians().sin(), -deg.to_radians().cos());
+                    spawn(self, shooter.x, shooter.y, dir, None, &mut events);
+                }
+            }
+            WeaponKind::Decoy => {
+                spawn(self, shooter.x, shooter.y, h, None, &mut events);
+            }
+            WeaponKind::Repel => {
+                self.repel(shooter, map, settings, targets, local_pid, &mut events);
+            }
             _ => {}
         }
         events
@@ -245,10 +267,17 @@ impl Weapons {
             WeaponKind::Bomb | WeaponKind::ProximityBomb | WeaponKind::Thor if !data.alternate() => {
                 (ship.bomb_speed, ship.bomb_bounce_count)
             }
+            WeaponKind::Burst => (ship.burst_speed, 0),
             _ => (0, 0),
         };
         let shooter_vel = Vec2::new(shooter.vel_x as f32 / 160.0, shooter.vel_y as f32 / 160.0);
-        let velocity = if data.is_mine() { Vec2::default() } else { shooter_vel.add(dir.scale(speed as f32 / 160.0)) };
+        let velocity = match data.kind() {
+            _ if data.is_mine() => Vec2::default(),
+            // Burst pieces leave from rest; decoys keep the shooter's velocity.
+            WeaponKind::Burst => dir.scale(speed as f32 / 160.0),
+            WeaponKind::Decoy => shooter_vel,
+            _ => shooter_vel.add(dir.scale(speed as f32 / 160.0)),
+        };
         let mut w = Weapon {
             position: Vec2::new(x as f32 / 16.0, y as f32 / 16.0),
             velocity,
@@ -263,6 +292,9 @@ impl Weapons {
             rng_seed: 0,
             link,
             first_tick: true,
+            burst_active: false,
+            decoy_direction: shooter.direction,
+            decoy_ship: shooter.ship,
         };
         for _ in 0..catch_up {
             let outcome = simulate(&mut w, map, settings, targets, local_pid, events);
@@ -283,6 +315,46 @@ impl Weapons {
             .wrapping_add(shooter.freq as u32);
         self.list.push(w);
         false
+    }
+
+    /// A repel acts once, where it's fired: enemy weapons inside the square of half-size
+    /// RepelDistance fly straight away from it at RepelSpeed (mines turn into bombs), and so does
+    /// our ship if it's an enemy outside a safe zone.
+    fn repel(
+        &mut self,
+        shooter: Shooter,
+        map: &Map,
+        settings: &ArenaSettings,
+        targets: &[Target],
+        local_pid: Option<u16>,
+        events: &mut Vec<WeaponEvent>,
+    ) {
+        let at = Vec2::new(shooter.x as f32 / 16.0, shooter.y as f32 / 16.0);
+        let half = settings.repel_distance as f32 / 16.0;
+        let speed = settings.repel_speed as f32 / 160.0;
+        let inside = |p: Vec2| (p.x - at.x).abs() <= half && (p.y - at.y).abs() <= half;
+        let away = |p: Vec2| {
+            let d = p.sub(at);
+            let len = d.length();
+            if len > 0.0 { d.scale(speed / len) } else { Vec2::new(0.0, -speed) }
+        };
+        for w in &mut self.list {
+            if w.freq == shooter.freq || w.data.kind() == WeaponKind::Repel || !inside(w.position) {
+                continue;
+            }
+            w.velocity = away(w.position);
+            if w.data.is_mine() {
+                w.data = w.data.with_alternate(false);
+            }
+            w.age = 0;
+            w.lifetime = Self::lifetime(settings, w.data);
+        }
+        let pushes_local = targets
+            .iter()
+            .find(|t| Some(t.pid) == local_pid && t.freq != shooter.freq && inside(t.position))
+            .filter(|t| map.tile(t.position.x as i32, t.position.y as i32) != TILE_SAFE)
+            .map(|t| away(t.position));
+        events.push(WeaponEvent::Repel { position: at, pushes_local });
     }
 
     /// Removes the rest of a multifire/double-barrel volley after one of its bullets hit a ship.
@@ -389,6 +461,9 @@ fn explode(w: &Weapon, map: &Map, settings: &ArenaSettings, events: &mut Vec<Wea
             rng_seed: 0,
             link: None,
             first_tick: false,
+            burst_active: false,
+            decoy_direction: 0,
+            decoy_ship: 0,
         });
     }
 }
@@ -441,6 +516,9 @@ fn simulate(
                 return Outcome::TimedOut;
             }
         }
+        if kind == WeaponKind::Burst {
+            w.burst_active = true;
+        }
         if matches!(kind, WeaponKind::Bullet | WeaponKind::Bomb | WeaponKind::ProximityBomb) {
             if w.bounces_remaining == 0 {
                 if kind != WeaponKind::Bullet {
@@ -454,7 +532,7 @@ fn simulate(
     if map.tile(w.position.x as i32, w.position.y as i32) == TILE_WORMHOLE {
         return Outcome::TimedOut;
     }
-    if kind == WeaponKind::Decoy {
+    if kind == WeaponKind::Decoy || (kind == WeaponKind::Burst && !w.burst_active) {
         return Outcome::Continue;
     }
 
@@ -547,6 +625,7 @@ pub fn damage_to_local(
                 base
             }
         }
+        WeaponKind::Burst => settings.burst_damage_level / 1000,
         WeaponKind::Bomb | WeaponKind::ProximityBomb | WeaponKind::Thor => {
             let mut bomb = settings.bomb_damage_level;
             let mut level = w.data.level() as i32;
@@ -692,6 +771,61 @@ mod tests {
             hit |= w.tick(&map, &s, &[enemy], Some(2), &[]).iter().any(|e| matches!(e, WeaponEvent::HitLocal(_)));
         }
         assert!(hit && w.list.is_empty());
+    }
+
+    #[test]
+    fn burst_fans_out_and_only_hurts_after_a_bounce() {
+        let s = ArenaSettings::default();
+        let enemy = Target { pid: 2, freq: 1, ship: 0, position: Vec2::new(514.5, 512.5) };
+        let mut w = Weapons::default();
+        w.fire(shooter(0), WeaponData::new(WeaponKind::Burst, 0), 0, &Map::empty(), &s, &[enemy], Some(2));
+        assert_eq!(w.list.len(), s.ships[0].burst_shrapnel as usize);
+        assert!(w.list.iter().all(|p| !p.burst_active));
+        // In open space they pass through the enemy harmlessly.
+        for _ in 0..30 {
+            assert!(!w.tick(&Map::empty(), &s, &[enemy], Some(2), &[]).iter().any(|e| matches!(e, WeaponEvent::HitLocal(_))));
+        }
+        // Next to a wall, the pieces that bounce become live.
+        let map = wall_map(515);
+        let mut w = Weapons::default();
+        w.fire(shooter(0), WeaponData::new(WeaponKind::Burst, 0), 0, &map, &s, &[], None);
+        for _ in 0..20 {
+            w.tick(&map, &s, &[], None, &[]);
+        }
+        assert!(w.list.iter().any(|p| p.burst_active));
+    }
+
+    #[test]
+    fn repel_pushes_enemy_weapons_and_our_ship_away() {
+        let s = ArenaSettings::default();
+        let map = Map::empty();
+        let mut w = Weapons::default();
+        let mut enemy_gun = shooter(10);
+        (enemy_gun.pid, enemy_gun.freq, enemy_gun.x) = (2, 1, 520 * 16);
+        // An enemy bullet flying left toward us, and our own ship 3 tiles to the right.
+        let mut left = enemy_gun;
+        left.direction = 30;
+        w.fire(left, WeaponData::new(WeaponKind::Bullet, 0), 0, &map, &s, &[], None);
+        let me = Target { pid: 5, freq: 1, ship: 0, position: Vec2::new(515.0, 512.0) };
+        let events = w.fire(shooter(0), WeaponData::new(WeaponKind::Repel, 0), 0, &map, &s, &[me], Some(5));
+        assert!(w.list[0].velocity.x > 0.0, "enemy bullet now flies away from the repel");
+        let push = events.iter().find_map(|e| match e {
+            WeaponEvent::Repel { pushes_local, .. } => *pushes_local,
+            _ => None,
+        });
+        assert!(push.is_some_and(|v| v.x > 0.0 && (v.length() - s.repel_speed as f32 / 160.0).abs() < 0.01));
+    }
+
+    #[test]
+    fn decoy_keeps_the_shooters_velocity_and_heading() {
+        let s = ArenaSettings::default();
+        let mut sh = shooter(12);
+        (sh.vel_x, sh.vel_y) = (320, -160);
+        let mut w = Weapons::default();
+        w.fire(sh, WeaponData::new(WeaponKind::Decoy, 0), 0, &Map::empty(), &s, &[], None);
+        let d = &w.list[0];
+        assert_eq!((d.velocity.x, d.velocity.y, d.decoy_direction), (2.0, -1.0, 12));
+        assert_eq!(d.lifetime, s.decoy_alive_time);
     }
 
     #[test]

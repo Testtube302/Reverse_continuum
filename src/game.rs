@@ -30,14 +30,17 @@ pub const BOMB_EXPLOSION_TICKS: u32 = 132;
 /// shade among ~1000 trail dots in the original: 5.0 dots per frame).
 pub const TRAIL_INTERVAL_TICKS: u32 = 2;
 pub const TRAIL_SHADE_TICKS: [u32; 6] = [5, 1, 4, 1, 1, 1];
-/// Trail fades per bullet colour (red, yellow, blue, purple), newest first. Red and blue were
-/// measured from the original's 16-bit screen; yellow and purple are not measured yet.
-pub const TRAIL_COLORS: [[[u8; 3]; 6]; 4] = [
+/// Trail fades per bullet colour (red, yellow, blue, purple) and for burst pieces, newest first.
+/// Red, blue and burst were measured from the original's 16-bit screen; yellow and purple are not.
+pub const TRAIL_COLORS: [[[u8; 3]; 6]; 5] = [
     [[206, 8, 8], [165, 40, 0], [115, 24, 0], [99, 32, 0], [74, 44, 0], [57, 44, 8]],
     [[231, 199, 41], [206, 150, 8], [165, 105, 8], [115, 81, 0], [82, 56, 0], [57, 44, 8]],
     [[123, 121, 198], [99, 97, 165], [90, 89, 148], [66, 65, 90], [49, 56, 82], [33, 24, 49]],
     [[173, 105, 222], [140, 81, 181], [115, 65, 148], [82, 48, 107], [57, 32, 74], [41, 24, 49]],
+    [[123, 121, 198], [115, 113, 181], [99, 97, 165], [74, 73, 107], [66, 65, 90], [33, 24, 49]],
 ];
+/// Row of [`TRAIL_COLORS`] for burst pieces.
+const BURST_TRAIL: u8 = 4;
 /// Engine exhaust while thrusting: a pair of puffs every 8 ticks, 18 px behind the ship's
 /// centre and 9 px apart, blown backward at ~135 px/s and slowing by 2.5% a tick, each playing
 /// exhaust.png's 19 frames at ~28 ms (measured from the original's warbird; other ships use the
@@ -64,6 +67,8 @@ pub enum EffectKind {
     EmpBomb,
     ShipExplosion,
     Warp,
+    /// repel.png: 10 frames over ~0.59 s.
+    Repel,
 }
 
 impl EffectKind {
@@ -73,6 +78,7 @@ impl EffectKind {
             Self::Bomb | Self::EmpBomb => BOMB_EXPLOSION_TICKS,
             Self::ShipExplosion => SHIP_EXPLOSION_TICKS,
             Self::Warp => WARP_TICKS,
+            Self::Repel => 59, // 10 frames at ~59 ms, measured
         }
     }
 }
@@ -116,7 +122,7 @@ pub struct TrailDot {
 
 impl TrailDot {
     pub fn color(&self) -> [u8; 3] {
-        let shades = &TRAIL_COLORS[self.palette as usize % 4];
+        let shades = &TRAIL_COLORS[self.palette as usize % TRAIL_COLORS.len()];
         let mut age = self.age;
         for (shade, ticks) in shades.iter().zip(TRAIL_SHADE_TICKS) {
             if age < ticks {
@@ -607,11 +613,20 @@ impl Game {
             }
         }
         for w in &self.weapons.list {
-            if !matches!(w.data.kind(), WeaponKind::Bullet | WeaponKind::BouncingBullet) || w.age % TRAIL_INTERVAL_TICKS != 0 {
+            let kind = w.data.kind();
+            if !matches!(kind, WeaponKind::Bullet | WeaponKind::BouncingBullet | WeaponKind::Burst)
+                || w.age % TRAIL_INTERVAL_TICKS != 0
+            {
                 continue;
             }
             // Same colour as the sprite: bullet level, or shrapnel level (red, yellow, blue).
-            let palette = if w.data.shrap() > 0 { w.data.shrap_level() } else { w.data.level() } as u8;
+            let palette = if kind == WeaponKind::Burst {
+                BURST_TRAIL
+            } else if w.data.shrap() > 0 {
+                w.data.shrap_level() as u8
+            } else {
+                w.data.level() as u8
+            };
             self.trails.push(TrailDot { position: w.position, palette, age: 0 });
         }
         for d in &mut self.debris {
@@ -781,6 +796,13 @@ impl Game {
                     self.sounds.push(SoundCue { name: sound.into(), position });
                 }
                 WeaponEvent::HitLocal(w) => self.take_hit(&w, map, settings),
+                WeaponEvent::Repel { position, pushes_local } => {
+                    self.effects.push(Effect { kind: EffectKind::Repel, position, age: 0 });
+                    if let (Some(v), Some(ship)) = (pushes_local, self.ship.as_mut()) {
+                        ship.velocity = v;
+                        ship.repel_ticks = settings.repel_time;
+                    }
+                }
             }
         }
     }
@@ -857,6 +879,9 @@ fn fire_sound(data: WeaponData) -> String {
         _ if data.is_mine() => format!("mine{level}"),
         WeaponKind::Bomb | WeaponKind::ProximityBomb => format!("bomb{level}"),
         WeaponKind::Thor => "thor".into(),
+        WeaponKind::Burst => "burst".into(),
+        WeaponKind::Decoy => "decoy".into(),
+        WeaponKind::Repel => "repel".into(),
         _ => "gun1".into(),
     }
 }

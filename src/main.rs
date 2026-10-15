@@ -176,6 +176,7 @@ struct Graphics {
     explode2: Sheet,
     empburst: Sheet,
     warp: Sheet,
+    repel: Sheet,
     exhaust: Sheet,
     trail: Sheet,
     /// Ship debris, one sheet per ship type: 9 pieces (rows) x 10 rotations.
@@ -203,6 +204,7 @@ impl Graphics {
             explode2: Sheet::load(assets, "explode2", 80, 80),
             empburst: Sheet::load(assets, "empburst", 80, 80),
             warp: Sheet::load(assets, "warp", 48, 48),
+            repel: Sheet::load(assets, "repel", 96, 96),
             exhaust: Sheet::load(assets, "exhaust", 16, 16),
             trail: Sheet::load(assets, "trail", 16, 16),
             junk: ["wb", "jv", "sp", "lv", "te", "we", "nw", "sh"]
@@ -337,15 +339,21 @@ fn draw_stars(cam_px: (f32, f32), sw: f32, sh: f32) {
 fn read_input() -> Input {
     let shift = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
     let tab = is_key_down(KeyCode::Tab);
+    let ctrl = is_key_down(KeyCode::LeftControl) || is_key_down(KeyCode::RightControl);
+    // Continuum's default keys: Shift+Ctrl repel, Shift+Del burst, F5 decoy, F6 thor.
     Input {
         left: is_key_down(KeyCode::Left),
         right: is_key_down(KeyCode::Right),
         forward: is_key_down(KeyCode::Up),
         backward: is_key_down(KeyCode::Down),
-        afterburner: shift && !tab,
-        gun: is_key_down(KeyCode::LeftControl) || is_key_down(KeyCode::RightControl),
+        afterburner: shift && !tab && !ctrl,
+        gun: ctrl && !shift,
         bomb: tab && !shift,
         mine: tab && shift,
+        repel: ctrl && shift,
+        burst: shift && is_key_down(KeyCode::Delete),
+        decoy: is_key_down(KeyCode::F5),
+        thor: is_key_down(KeyCode::F6),
     }
 }
 
@@ -489,7 +497,8 @@ async fn main() {
         if !typing && !menu_open && is_key_pressed(KeyCode::F2) {
             hud.show_statbox = !hud.show_statbox;
         }
-        if !typing && is_key_pressed(KeyCode::Delete) {
+        let shift_down = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
+        if !typing && !shift_down && is_key_pressed(KeyCode::Delete) {
             if let Some(ship) = game.ship.as_mut() {
                 ship.multifire = !ship.multifire;
                 game.notices.push(format!("Multifire {}", if ship.multifire { "on" } else { "off" }));
@@ -607,6 +616,13 @@ fn draw_weapon(gfx: &Graphics, w: &Weapon, x: f32, y: f32) {
             gfx.bombs.draw_centered(row * 10 + anim_frame(w.age, 10, 100), x, y);
         }
         WeaponKind::Thor => gfx.bombs.draw_centered(120 + anim_frame(w.age, 10, 100), x, y),
+        // Burst pieces: bullets.png frames 16-19 until their first bounce, then the last four.
+        WeaponKind::Burst => {
+            let first = if w.burst_active { gfx.bullets.frame_count().saturating_sub(4) } else { 16 };
+            gfx.bullets.draw_centered(first + anim_frame(w.age, 4, 15), x, y);
+        }
+        // A decoy looks like the shooter's ship as it was when fired.
+        WeaponKind::Decoy => gfx.ships.draw_centered(w.decoy_ship as u32 * 40 + w.decoy_direction.min(39) as u32, x, y),
         _ => {}
     }
 }
@@ -746,6 +762,7 @@ fn draw_world(game: &Game, tiles: &Tiles, gfx: &Graphics, hud: &mut hud::Hud) {
             EffectKind::EmpBomb => &gfx.empburst,
             EffectKind::ShipExplosion => &gfx.explode1,
             EffectKind::Warp => &gfx.warp,
+            EffectKind::Repel => &gfx.repel,
         };
         let n = sheet.frame_count();
         sheet.draw_centered((e.age * n / e.kind.duration()).min(n - 1), x, y);
