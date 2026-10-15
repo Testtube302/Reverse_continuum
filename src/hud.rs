@@ -558,3 +558,92 @@ pub fn draw_statbox(hud: &Hud, game: &Game) {
         hud.swatch(row, r, t + cut, 1.0, b - t + 1.0 - 2.0 * cut);
     }
 }
+
+/// Our own F1 help pages (the original's help text is Continuum's prose and isn't copied).
+/// Lines starting with '#' are section headings (yellow); `KEY<tab>text` lines put the key in
+/// yellow and the description in white, like the original's layout.
+const HELP_PAGES: [(&str, &str); 3] = [
+    (
+        "Controls",
+        "#Flying\n\
+         Up/Down\tThrust forward / reverse\n\
+         Left/Right\tTurn\n\
+         Shift\tAfterburner\n\
+         \n\
+         #Weapons\n\
+         Ctrl\tFire guns\n\
+         Tab\tFire a bomb\n\
+         Shift+Tab\tLay a mine\n\
+         Delete\tToggle multifire (once you have it)\n\
+         \n\
+         #Ships and screens\n\
+         1-8\tChoose a ship\n\
+         S\tSpectate\n\
+         Esc\tMenu (Q quits)\n\
+         F1\tNext help page\n\
+         F2\tPlayer list",
+    ),
+    (
+        "Chat",
+        "#Sending\n\
+         Enter\tStart typing; Enter again sends to everyone\n\
+         Esc\tCancel the message\n\
+         \n\
+         #Reading\n\
+         Blue\tPublic messages: name> text\n\
+         Yellow\tYour team\n\
+         Green\tPrivate messages, and zone messages\n\
+         Red\tWarnings from the zone",
+    ),
+    (
+        "About",
+        "#AIContinuum\n\
+         A clean-room SubSpace client written in Rust.\n\
+         It reads the original game's art and sounds from\n\
+         your own Continuum folder and plays on standard\n\
+         zones that accept VIE clients.",
+    ),
+];
+
+pub const HELP_PAGE_COUNT: usize = HELP_PAGES.len();
+
+/// Draws help page `page` in a bevelled box at the top left, sized to its text.
+pub fn draw_help(hud: &Hud, page: usize) {
+    let (topic, body) = HELP_PAGES[page % HELP_PAGES.len()];
+    let title = format!("Help: {topic} (F1 for more)");
+    const KEY_COL: usize = 12;
+    let lines: Vec<&str> = body.lines().map(str::trim_start).collect();
+    let width_chars = lines
+        .iter()
+        .map(|l| match l.split_once('\t') {
+            Some((_, text)) => KEY_COL + text.len(),
+            None => l.trim_start_matches('#').len(),
+        })
+        .chain([title.len() + 1])
+        .max()
+        .unwrap_or(10);
+    let w = width_chars as f32 * FONT_W + 4.0;
+    let h = 16.0 + lines.len() as f32 * FONT_H + 4.0;
+    let (x0, x1, y0, y1) = (0.0, w + 5.0, 0.0, h + 5.0);
+    hud.swatch(ColorRow::Background, x0 + 3.0, y0 + 3.0, x1 - x0 - 5.0, y1 - y0 - 5.0);
+    for (inset, row, cut) in [(2.0, ColorRow::Border1, 0.0), (1.0, ColorRow::Border2, 0.0), (0.0, ColorRow::Border3, 2.0)] {
+        let (l, r, t, b) = (x0 + inset, x1 - inset, y0 + inset, y1 - inset);
+        hud.swatch(row, l + cut, t, r - l + 1.0 - 2.0 * cut, 1.0);
+        hud.swatch(row, l + cut, b, r - l + 1.0 - 2.0 * cut, 1.0);
+        hud.swatch(row, l, t + cut, 1.0, b - t + 1.0 - 2.0 * cut);
+        hud.swatch(row, r, t + cut, 1.0, b - t + 1.0 - 2.0 * cut);
+    }
+    hud.text(&title, TextColor::Green, 13.0, 4.0);
+    hud.swatch(ColorRow::Border1, x0 + 3.0, 16.0, x1 - x0 - 5.0, 1.0);
+    for (i, line) in lines.iter().enumerate() {
+        let y = 18.0 + i as f32 * FONT_H;
+        if let Some(heading) = line.strip_prefix('#') {
+            hud.text(heading, TextColor::Yellow, 5.0, y);
+        } else if let Some((key, text)) = line.split_once('\t') {
+            hud.text(key, TextColor::Yellow, 5.0, y);
+            hud.text(text, TextColor::White, 5.0 + KEY_COL as f32 * FONT_W, y);
+        } else {
+            hud.text(line, TextColor::White, 5.0, y);
+        }
+    }
+}

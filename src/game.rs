@@ -77,6 +77,7 @@ impl Game {
         g.greens.sync(0x5EED_1234);
         let (map, settings) = g.world().unwrap();
         g.ship = Some(fresh_ship(map, settings, ship, 0, 0x5EED_1234));
+        g.camera = g.ship.as_ref().unwrap().position;
         g
     }
 

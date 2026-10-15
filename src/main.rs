@@ -41,6 +41,8 @@ struct Args {
     menu: bool,
     /// Start with the F2 stat box shown.
     statbox: bool,
+    /// Start with this F1 help page open.
+    help: Option<usize>,
 }
 
 fn parse_args() -> Args {
@@ -59,6 +61,7 @@ fn parse_args() -> Args {
         at: None,
         menu: false,
         statbox: false,
+        help: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -88,6 +91,7 @@ fn parse_args() -> Args {
             "--fullscreen" => {}
             "--menu" => args.menu = true,
             "--statbox" => args.statbox = true,
+            "--help-page" => args.help = value().parse().ok(),
             "--at" => {
                 let v = value();
                 let (x, y) = v.split_once(',').unwrap_or_else(|| panic!("--at x,y"));
@@ -364,6 +368,7 @@ async fn main() {
     let mut scripted_ticks = 0u32;
     let mut fire_held = false;
     let mut menu_open = args.menu;
+    let mut help_page: Option<usize> = args.help;
 
     loop {
         // Chat entry: Enter opens/sends, Esc cancels; while typing, keys go to the message.
@@ -433,6 +438,14 @@ async fn main() {
         if !typing && !menu_open && is_key_pressed(KeyCode::S) && !is_key_down(KeyCode::Tab) {
             game.request_ship(SPECTATOR);
         }
+        if !typing && !menu_open && is_key_pressed(KeyCode::F1) {
+            // F1 pages through help, closing after the last page.
+            help_page = match help_page {
+                None => Some(0),
+                Some(p) if p + 1 < hud::HELP_PAGE_COUNT => Some(p + 1),
+                Some(_) => None,
+            };
+        }
         if !typing && !menu_open && is_key_pressed(KeyCode::F2) {
             hud.show_statbox = !hud.show_statbox;
         }
@@ -481,6 +494,9 @@ async fn main() {
             draw_world(&game, tiles.as_ref().unwrap(), &gfx, &mut hud);
             if hud.show_statbox {
                 hud::draw_statbox(&hud, &game);
+            }
+            if let Some(page) = help_page {
+                hud::draw_help(&hud, page);
             }
             if menu_open {
                 hud::draw_menu(&hud);
