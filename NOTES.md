@@ -94,8 +94,12 @@
       gets " (Ball)" (dark red for enemies); our throw timer shows in red at +14,+14.
       Verified on the rig's "pb" arena: the zone logs our pickups and shots and echoes the
       carried/thrown states; a bot carrying the ball drew identically in both clients. NOT yet
-      verified: where a thrown ball comes to rest vs the original; goal message text (0x0B only
-      logged). Lesson: frames can pass with no game tick, so test aids hold keys for many frames
+      verified at first: rest position; goal message.
+      Loose ends (round 19): goal messages are zone chat ("Enemy Goal! by X", "SCORE: ...") —
+      ours shows them, nothing client-side needed. Ball flight: 7 positions of a thrown ball in
+      the original fit our physics (friction 5, 4000 px/10 s) with 0.047-tile RMS. Fixed: ball
+      physics now runs for spectators too (it froze when not in a ship). Test aid --carry-to
+      X,Y,DIR (teleport with the ball, throw 300 frames later, spectate 100 after). Lesson: frames can pass with no game tick, so test aids hold keys for many frames
       and runs must be long (ball positions are only resent every SendTime=5 s).
       Rig lessons: --screenshot runs exit after --frames (faster than 60 fps) — give a big
       --frames; xdotool focus on our Wine window is unreliable, so use --attach-to NAME / --freq N.

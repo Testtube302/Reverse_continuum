@@ -397,7 +397,7 @@ impl Game {
     /// Powerball handling for one tick: pick up a free ball within reach, throw a carried one with
     /// the gun/bomb keys (unless the zone lets those fire normally) or warp, the throw timer, and
     /// ball physics. Returns the input with any key used for throwing removed.
-    fn tick_ball(&mut self, mut input: Input, map: &Map, settings: &ArenaSettings) -> Input {
+    fn tick_ball(&mut self, mut input: Input, settings: &ArenaSettings) -> Input {
         let Some(s) = self.session.as_ref() else { return input };
         let Some(me) = s.me().map(|m| m.clone()) else { return input };
         let server_now = s.server_now();
@@ -459,7 +459,13 @@ impl Game {
             }
         }
 
-        // Physics, trails, goals.
+        input
+    }
+
+    /// Ball physics for everyone (ships and spectators): movement, trails, our goals.
+    fn tick_balls(&mut self, map: &Map, settings: &ArenaSettings) {
+        let Some(s) = self.session.as_ref() else { return };
+        let Some(me) = s.me().cloned() else { return };
         let freq = me.freq;
         let mode = settings.soccer_mode;
         for e in self.soccer.tick(map, me.pid, |at| crate::soccer::is_team_goal(at, freq, mode)) {
@@ -474,7 +480,6 @@ impl Game {
                 }
             }
         }
-        input
     }
 
     /// While attached, sit on the carrier and move with it; a carrier counts its turrets.
@@ -682,7 +687,7 @@ impl Game {
             // A turret only turns and fires; it rides at its carrier's position.
             let riding = self.follow_carrier();
             let input = if riding { Input { forward: false, backward: false, afterburner: false, ..input } } else { input };
-            let input = self.tick_ball(input, &map, &settings);
+            let input = self.tick_ball(input, &settings);
             let ship = self.ship.as_mut().unwrap();
             if ship.tick(&map, &settings, input) {
                 self.sounds.push(SoundCue { name: "bounce".into(), position: ship.position });
@@ -819,6 +824,8 @@ impl Game {
 
         self.tick_prizes(&map, &settings);
         self.tick_flags(&settings);
+
+        self.tick_balls(&map, &settings);
 
         // Weapons.
         let targets = self.targets();

@@ -53,6 +53,8 @@ struct Args {
     attach_to: Option<String>,
     /// Test aid: press warp (throws a carried ball) once on this frame.
     throw_after: Option<u32>,
+    /// Test aid: once we carry a ball, put our ship at (x, y) facing direction d, then throw.
+    carry_to: Option<(f32, f32, u8)>,
 }
 
 fn parse_args() -> Args {
@@ -77,6 +79,7 @@ fn parse_args() -> Args {
         freq: None,
         attach_to: None,
         throw_after: None,
+        carry_to: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -112,6 +115,12 @@ fn parse_args() -> Args {
             "--freq" => args.freq = value().parse().ok(),
             "--attach-to" => args.attach_to = Some(value()),
             "--throw-after" => args.throw_after = value().parse().ok(),
+            "--carry-to" => {
+                let v: Vec<f32> = value().split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                if let [x, y, d] = v[..] {
+                    args.carry_to = Some((x, y, d as u8));
+                }
+            }
             "--at" => {
                 let v = value();
                 let (x, y) = v.split_once(',').unwrap_or_else(|| panic!("--at x,y"));
@@ -437,6 +446,8 @@ async fn main() {
     let mut tiles: Option<Tiles> = None;
     let mut requested_initial_ship = false;
     let mut placed_at = false;
+    // Test aid (--carry-to): leave the ship after the throw so we don't catch the ball again.
+    let mut spectate_at_frame: Option<u32> = None;
     let mut accumulator = 0.0f32;
     let mut frame = 0u32;
     let mut scripted_ticks = 0u32;
@@ -519,6 +530,31 @@ async fn main() {
             }
         }
         // Online --at: place our first ship there (a test aid for reproducible comparisons).
+        if let Some((x, y, d)) = args.carry_to {
+            let me = game.session.as_ref().and_then(|s| s.pid);
+            if me.is_some_and(|pid| game.soccer.carried_by(pid).is_some()) {
+                if let Some(ship) = game.ship.as_mut() {
+                    ship.position = Vec2::new(x, y);
+                    ship.velocity = Vec2::default();
+                    ship.orientation = d as f32 / 40.0;
+                }
+                args.carry_to = None;
+                placed_at = true;
+                args.throw_after = Some(frame + 300);
+                spectate_at_frame = Some(frame + 400);
+                eprintln!("carry-to: at ({x},{y}) dir {d}, throwing at frame {}", frame + 300);
+            }
+        }
+        if spectate_at_frame.is_some_and(|f| frame >= f) {
+            spectate_at_frame = None;
+            game.request_ship(SPECTATOR);
+        }
+        if std::env::var_os("AIC_DEBUG_BALLS").is_some() && frame % 100 == 0 {
+            for b in &game.soccer.balls {
+                let at = b.position();
+                eprintln!("frame {frame} ball {} at ({:.3},{:.3}) state {:?} vel ({},{})", b.id, at.x, at.y, b.state, b.vel_x, b.vel_y);
+            }
+        }
         // Keep it there for the first 300 frames: a zone may swap our ship (and respawn us) at first.
         if let (Some(at), Some(ship), false) = (args.at, game.ship.as_mut(), placed_at) {
             ship.position = at;
