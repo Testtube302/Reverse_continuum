@@ -12,9 +12,11 @@ use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
 use std::time::{Duration, Instant};
 
 use crate::assets::RgbaImage;
-use crate::dialog::{self, Dialog, Event, IDCANCEL, IDOK, Item, Template};
+use crate::dialog::{Dialog, Event, IDCANCEL, IDOK, Item, Template};
+use crate::menubar::{self, Cmd};
 use crate::skin::{Hotspot, Rect, Skin, Step};
 use crate::winfont::{BitmapFont, TAHOMA_8};
+
 
 pub const GLYPH_W: i32 = 8;
 pub const GLYPH_H: i32 = 12;
@@ -512,20 +514,27 @@ pub struct Input {
     pub escape: bool,
     pub backspace: bool,
     pub tab: bool,
+    /// A letter pressed with Ctrl held (menu shortcuts).
+    pub ctrl_letter: Option<char>,
+    pub left: bool,
+    pub right: bool,
+    pub up: bool,
+    pub down: bool,
+    pub home: bool,
+    pub end: bool,
+    pub alt_f4: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
-    Play { addr: SocketAddr, zone: String, name: String, password: String, ship: u8 },
+    Play { addr: SocketAddr, zone: String, name: String, password: String, ship: u8, fullscreen: bool, resolution: (u16, u16) },
     Quit,
+    /// Open a web page.
+    Url(String),
 }
 
 /// Height of the Windows menu bar above the skin.
 pub const MENU_H: i32 = 19;
-/// The original's menu bar items and where Wine puts their text.
-const MENU_ITEMS: [(&str, i32); 7] =
-    [("&Game", 7), ("&View", 49), ("&Navigate", 87), ("&Resolution", 147), ("&Skin", 213), ("&Web Links && News", 250), ("&Help", 354)];
-
 // Dialog template ids and control ids in menu040.dll.
 const DLG_ZONES: u32 = 104;
 const DLG_PROFILE: u32 = 118;
@@ -555,6 +564,8 @@ const PROF_MOVE_UP: i32 = 1202;
 const PROF_MOVE_DOWN: i32 = 1203;
 const PASS_EDIT: i32 = 1023;
 const PASS_SAVE: i32 = 1201;
+const TIP_TEXT: i32 = 1227;
+const TIP_NEXT: i32 = 1226;
 
 const ZONE_TEXT_GREY: [u8; 3] = [128, 128, 128];
 const ZONE_TEXT_SHOWN: [u8; 3] = [0, 128, 0];
@@ -565,6 +576,9 @@ enum Kind {
     Zones(ZonesDialog),
     Profile,
     Password,
+    /// Any other dialog: shown, closed by its buttons.
+    Other,
+    Tip(usize),
 }
 
 struct Open {
@@ -605,7 +619,9 @@ pub const DEFAULT_DIRECTORY_SERVERS: &str =
     "sscentral.sscuservers.net sscentral.trenchwars.org directory.poid.be subspace.gamespec.org";
 
 pub struct Launcher {
-    pub skin: Skin,
+    /// Index 0 is the built-in skin, then the install's skins/*.skn.
+    skins: Vec<(String, Skin)>,
+    skin_idx: usize,
     spectate_icon: RgbaImage,
     ships: RgbaImage,
     font: MenuFont,
@@ -621,6 +637,9 @@ pub struct Launcher {
     dialog: Option<Open>,
     templates: Vec<Template>,
     menu_font: BitmapFont,
+    menu_open: Option<usize>,
+    menu_hot: Option<usize>,
+    tips: Vec<String>,
     /// Directory servers for the zones dialog.
     pub servers: String,
     /// Set whenever profile or zones change; the frontend saves and clears it.
@@ -630,6 +649,8 @@ pub struct Launcher {
 impl Launcher {
     pub fn new(
         skin: Skin,
+        extra_skins: Vec<(String, Skin)>,
+        tips: Vec<String>,
         spectate_icon: RgbaImage,
         ships: RgbaImage,
         font: RgbaImage,
@@ -638,7 +659,8 @@ impl Launcher {
         zones: Vec<Zone>,
     ) -> Self {
         let mut l = Self {
-            skin,
+            skins: std::iter::once(("<default>".to_string(), skin)).chain(extra_skins).collect(),
+            skin_idx: 0,
             spectate_icon,
             ships,
             font: MenuFont { image: font },
@@ -653,6 +675,9 @@ impl Launcher {
             dialog: None,
             templates,
             menu_font: BitmapFont::parse(TAHOMA_8).expect("built-in font"),
+            menu_open: None,
+            menu_hot: None,
+            tips,
             servers: DEFAULT_DIRECTORY_SERVERS.into(),
             dirty: false,
         };
@@ -661,9 +686,19 @@ impl Launcher {
         l
     }
 
+    fn skin(&self) -> &Skin {
+        &self.skins[self.skin_idx].1
+    }
+
+    /// Picks the skin named in the profile, if installed.
+    pub fn select_skin_from_profile(&mut self) {
+        let want = self.profile.get("skin").to_string();
+        self.skin_idx = self.skins.iter().position(|(n, _)| *n == want).unwrap_or(0);
+    }
+
     /// Window size: the menu bar plus the skin's main region.
     pub fn size(&self) -> (i32, i32) {
-        (self.skin.main.w(), self.skin.main.h() + MENU_H)
+        (self.skin().main.w(), self.skin().main.h() + MENU_H)
     }
 
     /// The original's whole window (frame, title and menu) in our coordinates; dialogs centre on it.
@@ -678,25 +713,25 @@ impl Launcher {
     }
 
     fn rows(&self) -> usize {
-        self.skin.hotspot("zonetext").map_or(0, |h| {
+        self.skin().hotspot("zonetext").map_or(0, |h| {
             let r = h.regions[0].rect;
             ((r.h() - GLYPH_H) / ROW_PITCH + 1).max(0) as usize
         })
     }
 
     fn rect(&self, name: &str) -> Option<Rect> {
-        self.skin.hotspot(name).map(|h| h.regions[0].rect)
+        self.skin().hotspot(name).map(|h| h.regions[0].rect)
     }
 
     fn hit(&self, x: i32, y: i32) -> Option<&Hotspot> {
         // Buttons first, then the boxes that contain them.
         let boxes = ["profbox", "shipbox", "zonebox", "infobox", "proftext", "zonetext"];
-        self.skin
+        self.skin()
             .hotspots
             .iter()
             .filter(|h| !boxes.contains(&h.name.as_str()))
             .find(|h| h.contains(x, y))
-            .or_else(|| ["zonetext", "proftext", "profbox", "shipbox", "zonebox", "infobox"].iter().filter_map(|n| self.skin.hotspot(n)).find(|h| h.contains(x, y)))
+            .or_else(|| ["zonetext", "proftext", "profbox", "shipbox", "zonebox", "infobox"].iter().filter_map(|n| self.skin().hotspot(n)).find(|h| h.contains(x, y)))
     }
 
     fn zone_row_at(&self, x: i32, y: i32) -> Option<usize> {
@@ -723,6 +758,13 @@ impl Launcher {
         }
         if self.dialog.is_some() {
             return self.update_dialog(input);
+        }
+        let (used, action) = self.update_menus(input);
+        if used {
+            return action;
+        }
+        if let Some(action) = self.shortcut(input) {
+            return action;
         }
         let (mx, my) = self.mouse;
         let rows = self.rows();
@@ -778,7 +820,18 @@ impl Launcher {
             }
             "profile" => self.open_profile(),
             "password" => self.open_password(),
-            _ => {}
+            "profile-ship" => {
+                self.open_profile();
+                if let Some(c) = self.dialog.as_mut().and_then(|o| o.d.control_mut(PROF_SHIP)) {
+                    c.dropped = true;
+                    c.hot = c.sel;
+                }
+            }
+            other => {
+                if let Some(k) = other.strip_prefix("menu:").and_then(|k| k.parse().ok()) {
+                    self.menu_open = Some(k);
+                }
+            }
         }
     }
 
@@ -818,8 +871,8 @@ impl Launcher {
                 c.sel = Some(sel.min(items.len().saturating_sub(1)));
             }
         };
-        let ships: Vec<&str> = SHIP_NAMES.iter().copied().chain(["Spectate"]).collect();
-        combo(&mut d, PROF_SHIP, &ships, p.ship() as usize);
+        let ships: Vec<&str> = std::iter::once("<default>").chain(SHIP_NAMES.iter().copied()).chain(["Spectate"]).collect();
+        combo(&mut d, PROF_SHIP, &ships, p.ship() as usize + 1);
         combo(&mut d, PROF_RESOLUTION, &["1024 x 768 x 16"], 0);
         combo(&mut d, PROF_REFRESH, &["<default>"], 0);
         combo(&mut d, PROF_WINDOW, &["Full Screen", "Window"], if p.get("windowed") == "1" { 1 } else { 0 });
@@ -884,6 +937,13 @@ impl Launcher {
             name: self.profile.get("name").to_string(),
             password,
             ship: self.profile.ship(),
+            fullscreen: self.profile.get("windowed") != "1",
+            resolution: self
+                .profile
+                .get("resolution")
+                .split_once('x')
+                .and_then(|(w, h)| Some((w.trim().parse().ok()?, h.trim().parse().ok()?)))
+                .unwrap_or((1024, 768)),
         })
     }
 
@@ -946,6 +1006,15 @@ impl Launcher {
                 (_, Event::Command(IDCANCEL)) => {
                     self.dialog = None;
                 }
+                (Kind::Other, Event::Command(IDOK)) => {
+                    self.dialog = None;
+                }
+                (Kind::Tip(k), Event::Command(TIP_NEXT)) => {
+                    let next = (*k + 1) % self.tips.len().max(1);
+                    *k = next;
+                    let text = self.tips.get(next).cloned().unwrap_or_default();
+                    open.d.set_text(TIP_TEXT, &text);
+                }
                 (Kind::Password, Event::Command(IDOK)) => {
                     let password = open.d.text(PASS_EDIT);
                     if password.is_empty() {
@@ -978,7 +1047,9 @@ impl Launcher {
                         p.set("name", &player);
                     }
                     p.set("password", &password);
-                    p.set("ship", &ship.to_string());
+                    if ship > 0 {
+                        p.set("ship", &(ship - 1).to_string());
+                    }
                     p.set("windowed", &windowed.to_string());
                     p.set("chat", &chats);
                     p.set("target", if target.is_empty() { "-1" } else { &target });
@@ -1040,14 +1111,14 @@ impl Launcher {
         c.origin = (0, 0);
         self.draw_menu_bar(c);
         c.origin = (0, MENU_H);
-        let main = self.skin.main;
-        c.blit(&self.skin.image, main.x0, main.y0, main.w(), main.h(), 0, 0);
+        let main = self.skin().main;
+        c.blit(&self.skin().image, main.x0, main.y0, main.w(), main.h(), 0, 0);
         let (mx, my) = self.mouse;
         let hover = if self.dialog.is_none() { self.hit(mx, my).map(|h| h.name.clone()) } else { None };
         let shown = self.shown();
         let rows = self.rows();
         let ship = self.profile.ship();
-        for h in &self.skin.hotspots {
+        for h in &self.skin().hotspots {
             let n = h.name.as_str();
             let alt = match n {
                 "spectate" => ship == 8,
@@ -1059,18 +1130,19 @@ impl Launcher {
             for r in &h.regions {
                 let steps = if alt && !r.alt.is_empty() { &r.alt } else { &r.norm };
                 if let Some((sx, sy)) = step_at(steps, self.tick()) {
-                    c.blit(&self.skin.image, sx, sy, r.rect.w(), r.rect.h(), r.rect.x0, r.rect.y0);
+                    c.blit(&self.skin().image, sx, sy, r.rect.w(), r.rect.h(), r.rect.x0, r.rect.y0);
                 }
             }
         }
-        // Ship pictures: frame 5 of each ship in graphics/ships.bm2, 2 px inside the button.
+        // Ship pictures: frame 5 of each ship in graphics/ships.bm2, centred on the button
+        // (2 px inside the default skin's 40x40 buttons).
         for k in 0..8 {
             if let Some(r) = self.rect(&format!("ship{}", k + 1)) {
-                c.blit(&self.ships, 5 * 36, k * 4 * 36, 36, 36, r.x0 + 2, r.y0 + 2);
+                c.blit(&self.ships, 5 * 36, k * 4 * 36, 36, 36, r.x0 + (r.w() - 36) / 2, r.y0 + (r.h() - 36) / 2);
             }
         }
         if let Some(r) = self.rect("spectate") {
-            c.blit(&self.spectate_icon, 0, 0, 36, 36, r.x0 + 2, r.y0 + 2);
+            c.blit(&self.spectate_icon, 0, 0, 36, 36, r.x0 + (r.w() - 36) / 2, r.y0 + (r.h() - 36) / 2);
         }
         if let Some(r) = self.rect("proftext") {
             for (i, key) in ["profile", "name", "macros", "keyboard"].iter().enumerate() {
@@ -1129,32 +1201,202 @@ impl Launcher {
         if let Some(open) = &self.dialog {
             open.d.draw(c);
         }
+        self.draw_menu_popup(c);
     }
 
-    /// The Windows menu bar: face colour, Tahoma 8 items with underlined mnemonics.
+    fn menus(&self) -> Vec<menubar::Menu> {
+        let res = self.profile.get("resolution");
+        let resolution = res
+            .split_once('x')
+            .and_then(|(w, h)| Some((w.trim().parse().ok()?, h.trim().parse().ok()?)))
+            .unwrap_or((1024, 768));
+        let names: Vec<String> = self.skins.iter().skip(1).map(|(n, _)| n.clone()).collect();
+        menubar::menus(&menubar::State {
+            resolution,
+            windowed: self.profile.get("windowed") == "1",
+            skins: &names,
+            skin: self.skin_idx,
+        })
+    }
+
+    /// The Windows menu bar, and the open drop-down on top of everything.
     fn draw_menu_bar(&self, c: &mut Canvas) {
+        let menus = self.menus();
+        menubar::draw_bar(c, &self.menu_font, &menus, self.size().0, self.menu_open);
+    }
+
+    fn draw_menu_popup(&self, c: &mut Canvas) {
+        if let Some(m) = self.menu_open.and_then(|k| self.menus().into_iter().nth(k)) {
+            menubar::draw_popup(c, &self.menu_font, &m, self.size().0, self.menu_hot);
+        }
+    }
+
+    /// Mouse and keys for the menu bar; returns true when the input was used.
+    fn update_menus(&mut self, input: &Input) -> (bool, Option<Action>) {
+        let menus = self.menus();
         let (w, _) = self.size();
-        c.fill(0, 0, w, MENU_H, dialog::FACE);
+        let (mx, my) = input.mouse;
         let f = &self.menu_font;
-        for (label, x) in MENU_ITEMS {
-            let mut pen = x;
-            let mut chars = label.chars();
-            while let Some(ch) = chars.next() {
-                let (ch, underline) = match ch {
-                    '&' => match chars.next() {
-                        Some('&') => ('&', false),
-                        next => (next.unwrap_or(' '), true),
-                    },
-                    _ => (ch, false),
-                };
-                let s = ch.to_string();
-                let next = f.draw(&s, pen, 6, |px, py| c.put(px, py, dialog::TEXT));
-                if underline {
-                    c.fill(pen, 6 + f.ascent + 1, next - pen - 1, 1, dialog::TEXT);
+        if let Some(open) = self.menu_open {
+            if let Some(h) = menubar::header_at(&menus, mx, my) {
+                if h != open {
+                    self.menu_open = Some(h);
+                    self.menu_hot = None;
                 }
-                pen = next;
+            }
+            let m = &menus[self.menu_open.unwrap_or(open)];
+            let hot = m.item_at(f, w, mx, my);
+            if hot.is_some() || !m.popup(f, w).contains(mx, my) {
+                self.menu_hot = hot;
+            }
+            if input.escape {
+                self.menu_open = None;
+                return (true, None);
+            }
+            if input.up || input.down {
+                let n = m.items.len();
+                let step = if input.down { 1 } else { n - 1 };
+                let mut k = self.menu_hot.unwrap_or(if input.down { n - 1 } else { 0 });
+                for _ in 0..n {
+                    k = (k + step) % n;
+                    if m.items[k].cmd.is_some() {
+                        break;
+                    }
+                }
+                self.menu_hot = Some(k);
+                return (true, None);
+            }
+            if input.left || input.right {
+                let n = menus.len();
+                let cur = self.menu_open.unwrap_or(open);
+                self.menu_open = Some(if input.right { (cur + 1) % n } else { (cur + n - 1) % n });
+                self.menu_hot = None;
+                return (true, None);
+            }
+            let chosen = if input.left_pressed {
+                if menubar::header_at(&menus, mx, my) == Some(open) {
+                    self.menu_open = None;
+                    return (true, None);
+                }
+                hot
+            } else if input.enter {
+                self.menu_hot
+            } else {
+                return (true, None);
+            };
+            let cmd = chosen.and_then(|k| m.items[k].cmd);
+            self.menu_open = None;
+            self.menu_hot = None;
+            return (true, cmd.and_then(|c| self.run_command(c)));
+        }
+        if input.left_pressed {
+            if let Some(h) = menubar::header_at(&menus, mx, my) {
+                self.menu_open = Some(h);
+                self.menu_hot = None;
+                return (true, None);
             }
         }
+        (false, None)
+    }
+
+    /// Menu commands and their keyboard shortcuts.
+    fn run_command(&mut self, cmd: Cmd) -> Option<Action> {
+        let shown = self.shown();
+        match cmd {
+            Cmd::Play => return self.play(),
+            Cmd::Quit => return Some(Action::Quit),
+            Cmd::Profiles => self.open_profile(),
+            Cmd::Zones => self.open_zones(),
+            Cmd::Macros => self.open_other(120),
+            Cmd::KeyDefs => self.open_other(122),
+            Cmd::Trace => self.open_other(107),
+            Cmd::Options => self.open_other(159),
+            Cmd::AdvancedOptions => self.open_other(113),
+            Cmd::Proxy => self.open_other(151),
+            Cmd::Banners => self.open_other(161),
+            Cmd::About => self.open_other(121),
+            Cmd::Tip => self.open_tip(),
+            Cmd::PrevProfile | Cmd::NextProfile => {}
+            Cmd::PrevShip | Cmd::NextShip => {
+                // Spectator (8) sits before the Warbird on the ship panel.
+                let order = [8u8, 0, 1, 2, 3, 4, 5, 6, 7];
+                let k = order.iter().position(|&s| s == self.profile.ship()).unwrap_or(0);
+                let k = if cmd == Cmd::NextShip { (k + 1) % 9 } else { (k + 8) % 9 };
+                self.set_ship(order[k]);
+            }
+            Cmd::PrevZone | Cmd::NextZone => {
+                if !shown.is_empty() {
+                    let cur = self.selected.unwrap_or(0);
+                    let next = if cmd == Cmd::NextZone { (cur + 1).min(shown.len() - 1) } else { cur.saturating_sub(1) };
+                    self.selected = Some(next);
+                    self.profile.set("zone", &self.zones[shown[next]].name.clone());
+                    self.dirty = true;
+                    let rows = self.rows();
+                    if next < self.scroll {
+                        self.scroll = next;
+                    } else if next >= self.scroll + rows {
+                        self.scroll = next + 1 - rows;
+                    }
+                }
+            }
+            Cmd::Resolution(w, h) => {
+                self.profile.set("resolution", &format!("{w}x{h}"));
+                self.dirty = true;
+            }
+            Cmd::Windowed => {
+                let on = self.profile.get("windowed") == "1";
+                self.profile.set("windowed", if on { "0" } else { "1" });
+                self.dirty = true;
+            }
+            Cmd::Skin(k) => {
+                if k < self.skins.len() {
+                    self.skin_idx = k;
+                    self.profile.set("skin", &self.skins[k].0.clone());
+                    self.dirty = true;
+                    self.scroll = 0;
+                }
+            }
+            Cmd::Url(u) => return Some(Action::Url(u.to_string())),
+            Cmd::ZoneNews => {}
+        }
+        None
+    }
+
+    fn shortcut(&mut self, input: &Input) -> Option<Option<Action>> {
+        let cmd = match input.ctrl_letter {
+            Some('p') => Cmd::Profiles,
+            Some('m') => Cmd::Macros,
+            Some('k') => Cmd::KeyDefs,
+            Some('z') => Cmd::Zones,
+            Some('t') => Cmd::Trace,
+            Some('o') => Cmd::Options,
+            Some('a') => Cmd::AdvancedOptions,
+            Some('x') => Cmd::Proxy,
+            Some('e') => Cmd::Banners,
+            _ if input.home => Cmd::PrevProfile,
+            _ if input.end => Cmd::NextProfile,
+            _ if input.left => Cmd::PrevShip,
+            _ if input.right => Cmd::NextShip,
+            _ if input.up => Cmd::PrevZone,
+            _ if input.down => Cmd::NextZone,
+            _ if input.alt_f4 => Cmd::Quit,
+            _ => return None,
+        };
+        Some(self.run_command(cmd))
+    }
+
+    fn open_other(&mut self, id: u32) {
+        if let Some(d) = self.new_dialog(id) {
+            self.dialog = Some(Open { kind: Kind::Other, d });
+        }
+    }
+
+    fn open_tip(&mut self) {
+        let Some(mut d) = self.new_dialog(160) else { return };
+        let k = (self.started.elapsed().as_nanos() as usize) % self.tips.len().max(1);
+        d.set_text(TIP_TEXT, self.tips.get(k).map_or("", |s| s.as_str()));
+        d.focus_id(IDCANCEL);
+        self.dialog = Some(Open { kind: Kind::Tip(k), d });
     }
 }
 

@@ -40,7 +40,29 @@ impl MenuScreen {
             zones.push(z);
         }
         let templates = aicontinuum::dialog::templates(&assets.read("menu040.dll")?);
-        let launcher = Launcher::new(skin, spectate, ships, font, templates, profile, zones);
+        // Installed skins (skins/*.skn); "._" files are macOS resource-fork leftovers.
+        let mut extra: Vec<(String, Skin)> = std::fs::read_dir(assets.path("skins"))
+            .map(|dir| {
+                dir.flatten()
+                    .filter_map(|e| {
+                        let name = e.file_name().to_string_lossy().into_owned();
+                        let stem = name.strip_suffix(".skn").or_else(|| name.strip_suffix(".SKN"))?.to_string();
+                        if stem.starts_with('.') {
+                            return None;
+                        }
+                        let skin = Skin::from_skn(&std::fs::read(e.path()).ok()?).ok()?;
+                        Some((stem, skin))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        extra.sort_by_key(|(n, _)| n.to_ascii_lowercase());
+        let tips: Vec<String> = assets
+            .read("Tips.dat")
+            .map(|b| String::from_utf8_lossy(&b).lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
+            .unwrap_or_default();
+        let mut launcher = Launcher::new(skin, extra, tips, spectate, ships, font, templates, profile, zones);
+        launcher.select_skin_from_profile();
         let (w, h) = launcher.size();
         let canvas = Canvas::new(w, h);
         let texture = Texture2D::from_rgba8(w as u16, h as u16, &canvas.px);
@@ -73,8 +95,9 @@ impl MenuScreen {
             self.last_click = if double_click { None } else { Some((now, mouse)) };
         }
         let mut chars = Vec::new();
+        let ctrl = is_key_down(KeyCode::LeftControl) || is_key_down(KeyCode::RightControl);
         while let Some(c) = get_char_pressed() {
-            if !c.is_control() {
+            if !c.is_control() && !ctrl {
                 chars.push(c);
             }
         }
@@ -89,12 +112,37 @@ impl MenuScreen {
             escape: is_key_pressed(KeyCode::Escape),
             backspace: is_key_pressed(KeyCode::Backspace),
             tab: is_key_pressed(KeyCode::Tab),
+            ctrl_letter: if is_key_down(KeyCode::LeftControl) || is_key_down(KeyCode::RightControl) {
+                [
+                    (KeyCode::P, 'p'),
+                    (KeyCode::M, 'm'),
+                    (KeyCode::K, 'k'),
+                    (KeyCode::Z, 'z'),
+                    (KeyCode::T, 't'),
+                    (KeyCode::O, 'o'),
+                    (KeyCode::A, 'a'),
+                    (KeyCode::X, 'x'),
+                    (KeyCode::E, 'e'),
+                ]
+                .iter()
+                .find(|(k, _)| is_key_pressed(*k))
+                .map(|(_, c)| *c)
+            } else {
+                None
+            },
+            left: is_key_pressed(KeyCode::Left),
+            right: is_key_pressed(KeyCode::Right),
+            up: is_key_pressed(KeyCode::Up),
+            down: is_key_pressed(KeyCode::Down),
+            home: is_key_pressed(KeyCode::Home),
+            end: is_key_pressed(KeyCode::End),
+            alt_f4: (is_key_down(KeyCode::LeftAlt) || is_key_down(KeyCode::RightAlt)) && is_key_pressed(KeyCode::F4),
         }
     }
 
     /// Runs the screen until Play or Quit.
     pub async fn run(&mut self, args: &Args) -> Option<Action> {
-        let (w, h) = self.launcher.size();
+        let (mut w, mut h) = self.launcher.size();
         request_new_screen_size(w as f32, h as f32);
         let mut frame = 0u32;
         loop {
@@ -103,6 +151,14 @@ impl MenuScreen {
                 input.mouse = m;
             }
             input.right_down |= args.right_held;
+            if frame >= 30 && (frame - 30) % 15 == 0 {
+                if let Some(&p) = args.clicks.get(((frame - 30) / 15) as usize) {
+                    input.mouse = p;
+                    input.left_pressed = true;
+                }
+            } else if let Some(&p) = args.clicks.get(((frame.saturating_sub(30)) / 15) as usize).filter(|_| frame >= 30) {
+                input.mouse = p;
+            }
             // Test aid: open a dialog once the first pings have had time to come back.
             if let (Some(which), 20) = (&args.open, frame) {
                 self.launcher.open(which);
@@ -112,8 +168,20 @@ impl MenuScreen {
                 action = self.launcher.press_play();
             }
             self.save();
+            if let Some(Action::Url(url)) = &action {
+                open_url(url);
+                action = None;
+            }
             if action.is_some() {
                 return action;
+            }
+            // A different skin can change the window size.
+            if self.launcher.size() != (w, h) {
+                (w, h) = self.launcher.size();
+                request_new_screen_size(w as f32, h as f32);
+                self.canvas = Canvas::new(w, h);
+                self.texture = Texture2D::from_rgba8(w as u16, h as u16, &self.canvas.px);
+                self.texture.set_filter(FilterMode::Nearest);
             }
             self.launcher.draw(&mut self.canvas);
             self.texture.update_from_bytes(w as u32, h as u32, &self.canvas.px);
@@ -133,5 +201,18 @@ impl MenuScreen {
             }
             next_frame().await;
         }
+    }
+}
+
+/// Opens a web page in the system browser.
+fn open_url(url: &str) {
+    #[cfg(target_os = "macos")]
+    let r = std::process::Command::new("open").arg(url).spawn();
+    #[cfg(target_os = "windows")]
+    let r = std::process::Command::new("cmd").args(["/C", "start", "", url]).spawn();
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let r = std::process::Command::new("xdg-open").arg(url).spawn();
+    if let Err(e) = r {
+        eprintln!("could not open {url}: {e}");
     }
 }

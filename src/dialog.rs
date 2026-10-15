@@ -35,6 +35,8 @@ const WS_VSCROLL: u32 = 0x0020_0000;
 const ES_PASSWORD: u32 = 0x20;
 const ES_NUMBER: u32 = 0x2000;
 const SS_CENTER: u32 = 1;
+const SS_RIGHT: u32 = 2;
+const ES_MULTILINE: u32 = 4;
 const BS_LEFT: u32 = 0x100;
 const WS_EX_STATICEDGE: u32 = 0x2_0000;
 
@@ -210,6 +212,9 @@ pub struct Control {
     pub highlight: Option<[u8; 3]>,
     /// Rows drawn in (synthesised) bold.
     pub bold: Vec<bool>,
+    /// Combo box: list dropped down, and the row under the mouse.
+    pub dropped: bool,
+    pub hot: Option<usize>,
 }
 
 impl Control {
@@ -288,6 +293,8 @@ impl Dialog {
                     top: 0,
                     highlight: None,
                     bold: Vec::new(),
+                    dropped: false,
+                    hot: None,
                     t: c.clone(),
                 }
             })
@@ -351,10 +358,55 @@ impl Dialog {
         c.t.style & WS_VSCROLL != 0 && c.items.len() > self.list_rows(c)
     }
 
+    /// A dropped combo box's list rectangle (client pixels) and how many rows it shows.
+    fn drop_list(&self, c: &Control) -> (Rect, usize) {
+        let field = c.field(&self.font);
+        let room = ((c.rect.y1 - field.y1 - 2) / self.font.height).max(1) as usize;
+        let rows = c.items.len().min(room).max(1);
+        let r = Rect { x0: field.x0, y0: field.y1 + 1, x1: field.x1, y1: field.y1 + rows as i32 * self.font.height + 2 };
+        (r, rows)
+    }
+
     pub fn handle(&mut self, input: &Input) -> Vec<Event> {
         let mut out = Vec::new();
         let (ox, oy) = self.client_origin();
         let (mx, my) = (input.mouse.0 - ox, input.mouse.1 - oy);
+        // An open combo-box list takes all input until it closes.
+        if let Some(i) = self.controls.iter().position(|c| c.dropped) {
+            let (list, rows) = self.drop_list(&self.controls[i]);
+            let fh = self.font.height;
+            let c = &mut self.controls[i];
+            let under = (list.contains(mx, my) && my > list.y0 && my < list.y1)
+                .then(|| c.top + ((my - list.y0 - 1) / fh) as usize)
+                .filter(|&k| k < c.items.len());
+            if under.is_some() {
+                c.hot = under;
+            }
+            if input.up || input.down {
+                let n = c.items.len();
+                let k = c.hot.unwrap_or(0);
+                c.hot = Some(if input.down { (k + 1).min(n.saturating_sub(1)) } else { k.saturating_sub(1) });
+            }
+            if let Some(h) = c.hot {
+                if h < c.top {
+                    c.top = h;
+                } else if h >= c.top + rows {
+                    c.top = h + 1 - rows;
+                }
+            }
+            if input.escape {
+                c.dropped = false;
+            } else if input.enter || (input.left_pressed && under.is_some()) {
+                c.dropped = false;
+                if let Some(h) = c.hot {
+                    c.sel = Some(h);
+                    out.push(Event::Select(c.t.id, h));
+                }
+            } else if input.left_pressed {
+                c.dropped = false;
+            }
+            return out;
+        }
         if input.wheel != 0 {
             if let Some(i) = self.controls.iter().position(|c| c.visible && c.t.class == Class::ListBox && c.rect.contains(mx, my)) {
                 let rows = self.list_rows(&self.controls[i]);
@@ -411,10 +463,9 @@ impl Dialog {
                         }
                     }
                     Class::ComboBox if !c.items.is_empty() => {
-                        // No drop-down: each click steps to the next choice.
-                        let next = c.sel.map_or(0, |s| (s + 1) % c.items.len());
-                        c.sel = Some(next);
-                        out.push(Event::Select(c.t.id, next));
+                        c.dropped = true;
+                        c.hot = c.sel;
+                        c.top = 0;
                     }
                     _ => {}
                 }
@@ -497,6 +548,22 @@ impl Dialog {
         for (i, ctl) in self.controls.iter().enumerate() {
             if ctl.visible {
                 self.draw_control(c, ctl, ox, oy, self.focus == Some(i));
+            }
+        }
+        if let Some(ctl) = self.controls.iter().find(|c| c.dropped) {
+            let (l, rows) = self.drop_list(ctl);
+            let l = Rect { x0: l.x0 + ox, y0: l.y0 + oy, x1: l.x1 + ox, y1: l.y1 + oy };
+            c.fill(l.x0, l.y0, l.w(), l.h(), WINDOW);
+            outline(c, l, TEXT);
+            let fh = self.font.height;
+            for (k, item) in ctl.items.iter().enumerate().skip(ctl.top).take(rows) {
+                let y = l.y0 + 1 + (k - ctl.top) as i32 * fh;
+                let hot = ctl.hot == Some(k);
+                if hot {
+                    c.fill(l.x0 + 1, y, l.w() - 2, fh, HIGHLIGHT);
+                }
+                let text: String = item.runs.iter().map(|r| r.1.as_str()).collect();
+                self.text_line(c, &text, l.x0 + 2, y, if hot { HILIGHT } else { TEXT }, false);
             }
         }
     }
@@ -611,9 +678,15 @@ impl Dialog {
                 let tx = r.x0 + 3;
                 let ty = r.y0 + 3;
                 c.clip = Some((r.x0 + 2, r.y0 + 2, r.x1 - 2, r.y1 - 2));
-                self.text_line(c, &shown, tx, ty, TEXT, false);
+                if ctl.t.style & ES_MULTILINE != 0 {
+                    for (i, line) in wrap_px(&self.font, &shown, r.w() - 8).iter().enumerate() {
+                        self.text_line(c, line, tx, ty + i as i32 * fh, TEXT, false);
+                    }
+                } else {
+                    self.text_line(c, &shown, tx, ty, TEXT, false);
+                }
                 c.clip = None;
-                if focused {
+                if focused && ctl.t.style & ES_MULTILINE == 0 && ctl.t.style & 0x800 == 0 {
                     c.fill(tx + self.font.width(&shown), ty, 1, fh, TEXT);
                 }
             }
@@ -624,7 +697,11 @@ impl Dialog {
                     if y >= r.y1 {
                         break;
                     }
-                    let x = if ctl.t.style & 0xF == SS_CENTER { r.x0 + (r.w() - self.text_width(line, true)) / 2 } else { r.x0 };
+                    let x = match ctl.t.style & 0xF {
+                        SS_CENTER => r.x0 + (r.w() - self.text_width(line, true)) / 2,
+                        SS_RIGHT => r.x1 + 1 - self.text_width(line, true),
+                        _ => r.x0,
+                    };
                     self.text_line(c, line, x, y, TEXT, true);
                 }
             }

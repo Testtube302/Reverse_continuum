@@ -7,6 +7,7 @@ pub mod game;
 pub mod help;
 pub mod launcher;
 pub mod lvl;
+pub mod menubar;
 pub mod net;
 pub mod pe;
 pub mod prizes;

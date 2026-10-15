@@ -62,6 +62,8 @@ struct Args {
     right_held: bool,
     open: Option<String>,
     autoplay: bool,
+    /// Startup-screen test aid: left clicks at these points, one every 15 frames from frame 30.
+    clicks: Vec<(i32, i32)>,
 }
 
 fn parse_args() -> Args {
@@ -91,6 +93,7 @@ fn parse_args() -> Args {
         right_held: false,
         open: None,
         autoplay: false,
+        clicks: Vec::new(),
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -127,6 +130,15 @@ fn parse_args() -> Args {
             }
             "--right" => args.right_held = true,
             "--autoplay" => args.autoplay = true,
+            "--clicks" => {
+                args.clicks = value()
+                    .split(';')
+                    .filter_map(|p| {
+                        let (x, y) = p.split_once(',')?;
+                        Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
+                    })
+                    .collect()
+            }
             "--open" => args.open = Some(value()),
             "--menu" => args.menu = true,
             "--statbox" => args.statbox = Some(value().parse().unwrap_or(0)),
@@ -432,15 +444,21 @@ async fn main() {
     let mut screen = menu::MenuScreen::load(&assets).unwrap_or_else(|e| die(e));
     loop {
         match screen.run(&args).await {
-            Some(Action::Play { addr, name, password, ship, .. }) => {
+            Some(Action::Play { addr, name, password, ship, fullscreen, resolution, .. }) => {
                 let mut game_args = parse_args();
                 game_args.connect = Some(addr);
                 game_args.name = name;
                 game_args.password = password;
                 game_args.ship = (ship < 8).then_some(ship);
-                request_new_screen_size(1024.0, 768.0);
+                // The profile's Resolution / Windowed choices, as in the original.
+                if fullscreen && args.screenshot.is_none() {
+                    set_fullscreen(true);
+                } else {
+                    request_new_screen_size(resolution.0 as f32, resolution.1 as f32);
+                }
                 next_frame().await;
                 run_game(game_args, &assets).await;
+                set_fullscreen(false);
                 if args.screenshot.is_some() {
                     break;
                 }

@@ -315,8 +315,16 @@
   `01 <min players u32>`, reply `01` + entries `ip[4] port u16 players u16 billing u16
   version u32 name[64] description\0` (sharvil/subspace starlight ConfigDialog.cpp). Live:
   sscuservers, trenchwars, poid.be (ssdir.playsubspace.com is dead).
-- Window = Windows menu bar (19 px, Tahoma 8, measured item x positions, underlined mnemonics,
-  menus not functional yet) + skin. 0 differing pixels for the whole 640x515 window.
+- Window = Windows menu bar (19 px, Tahoma 8, measured item x positions, underlined mnemonics) +
+  skin. Menus (src/menubar.rs) follow menu040.dll resource 101 plus the run-time lists seen on
+  the original (resolutions, skins/*.skn, web links, help). Wine look: pressed header = 1 px
+  sunken box over the measured header rect; popup at the header's left, raised 3 px frame,
+  items 17 px (text at +20,+4), separators 9 px (shadow at +4, highlight +5), navy highlight
+  across width-6, 7x6 tick at (+6,+6). Widths: Game 110, View 209 (Wine draws 207 on a second
+  open), Navigate 145, Resolution 125, otherwise longest label + 38; shortcuts at 60/158/97.
+  All seven menus match the original (0 px) except Skin, whose rig folder has '._' junk files.
+  Shortcuts Ctrl-P/M/K/Z/T/O/A/X/E, arrows/Home/End navigate, Alt-F4 quits. Play uses the
+  profile's Windowed/Resolution (full screen by default, as the original). 0 differing pixels for the whole 640x515 window.
 - Dialogs (src/dialog.rs) are built from the DLGTEMPLATEs in `menu040.dll` (Add/Update Zones 104,
   Select/Edit Profile 118, Password Required 142, ...): dialog units with MS Sans Serif 8
   (base 6x13, MulDiv), modal frame 3 px, caption 19 px, centred on the original's whole window
@@ -333,3 +341,4 @@
   - Zones list is owner-drawn by Continuum: selection (0,0,128), selected text (128,255,128),
     shown zones bold (synthetic: glyphs again 1 px right, advance +1), others (128,128,128);
     players right-aligned ending x+30, name at x+43 from the list's inner left.
+  - combo drop-down: 1 px black frame under the field, 13 px rows, navy hot row; matches.
