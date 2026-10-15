@@ -393,9 +393,12 @@ impl Transport {
         }
         let Some(&kind) = pkt.get(1) else { return };
         match kind {
-            0x12 if self.state == State::Connected && pkt.len() == 6 => {
+            // Like nullspace's ContinuumKeyExpansionRequest handler, read the
+            // seed prefix and allow trailing bytes. Exact-length gating silently
+            // drops padded challenges and leaves the server waiting for a reply.
+            0x12 if self.state == State::Connected && pkt.len() >= 6 => {
                 let seed = u32_at(pkt, 2).unwrap();
-                eprintln!("[Continuum] received session key challenge");
+                eprintln!("[Continuum] received session key challenge ({} bytes)", pkt.len());
                 if let Some(cont) = self.continuum.as_mut() {
                     if let Some(table) = (cont.expand)(seed) {
                         let mut response = vec![0, 0x13];

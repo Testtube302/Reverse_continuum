@@ -283,6 +283,18 @@ fn answers_encrypted_expansion_challenge_without_changing_session_key() {
     let response = cipher.decrypt(&receive(&server)).unwrap();
     assert_eq!(&response[..6], &[0, 0x13, 123, 0, 0, 0]);
     assert_eq!(&response[6..], &[1, 0xef, 0xcd, 0xab].repeat(20));
+    // The public reference reads the seed and permits trailing bytes. Exercise
+    // direct and clustered padded challenges, as well as the minimum form above.
+    for request in [
+        vec![0, 0x12, 123, 0, 0, 0, 0xa5, 0x5a],
+        vec![0, 0x0e, 13, 0, 0x12, 123, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7],
+    ] {
+        server.send_to(&cipher.encrypt(&request).unwrap(), addr).unwrap();
+        assert!(settle(&mut client).is_empty());
+        let response = cipher.decrypt(&receive(&server)).unwrap();
+        assert_eq!(&response[..6], &[0, 0x13, 123, 0, 0, 0]);
+        assert_eq!(&response[6..], &[1, 0xef, 0xcd, 0xab].repeat(20));
+    }
     server
         .send_to(&cipher.encrypt(&[0, 0x12, 123]).unwrap(), addr)
         .unwrap();
@@ -441,5 +453,15 @@ fn large_encrypted_download_crosses_multiple_ack_windows() {
         }
         ids.sort_unstable();
         assert_eq!(ids, (batch * 10..batch * 10 + 10).collect::<Vec<_>>());
+        if batch == 0 {
+            // Pause after 4,800 bytes until the client answers a padded challenge.
+            // This reproduces a server that closes a download when the reply is absent.
+            let challenge = [0, 0x0e, 13, 0, 0x12, 123, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7];
+            server.send_to(&cipher.encrypt(&challenge).unwrap(), addr).unwrap();
+            assert!(settle(&mut client).is_empty());
+            let reply = cipher.decrypt(&receive(&server)).unwrap();
+            assert_eq!(&reply[..6], &[0, 0x13, 123, 0, 0, 0]);
+            assert_eq!(&reply[6..], &[0; 80]);
+        }
     }
 }

@@ -454,3 +454,17 @@
   This does not prove legacy server interoperability. Preserve the last eight server
   arena/warning/error notices at failure (escaped text); omit player/private chat.
   Three chat packets were seen on the failing run, but their content was not retained.
+
+- Found an additional concrete compatibility bug: 00 12 expansion challenges were
+  silently ignored unless exactly six bytes long. Public nullspace Connection.cpp
+  ContinuumKeyExpansionRequest reads the four-byte seed without that restriction.
+  An encrypted eight-byte challenge reproduced the missing reply in a failing
+  pre-fix regression. Accept the six-byte prefix with trailing bytes; continue to
+  reject truncated seeds. Tests cover direct and clustered padded challenges,
+  unchanged response table/session cipher, and a 14,400-byte download that pauses
+  after 4,800 bytes until a padded challenge is answered. Full suite passes and
+  local encrypted login remains connected for 30 seconds. Existing Trench Wars
+  metadata did not retain inner core packet lengths, so this remains an unverified
+  explanation of its disconnect, not a confirmed public-server fix. No public
+  login was initiated. The isolated reference containers were inspected read-only;
+  no new original-client packet capture was performed in this follow-up.
