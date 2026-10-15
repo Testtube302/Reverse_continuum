@@ -475,6 +475,9 @@ async fn main() {
         if !typing && !menu_open && is_key_pressed(KeyCode::S) && !is_key_down(KeyCode::Tab) {
             game.request_ship(SPECTATOR);
         }
+        if !typing && !menu_open && is_key_pressed(KeyCode::F7) {
+            game.request_attach();
+        }
         if !typing && !menu_open && is_key_pressed(KeyCode::F1) {
             // F1 pages through help, closing after the last page.
             help_page = match help_page {

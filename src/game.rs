@@ -164,7 +164,8 @@ impl BombPuff {
 #[derive(Clone, Debug, PartialEq)]
 pub struct CenterMessage {
     pub text: String,
-    pub kill: bool,
+    /// Yellow (kills, refusals) rather than blue (arena enter/leave).
+    pub yellow: bool,
     pub age: u32,
 }
 
@@ -183,6 +184,8 @@ pub struct Game {
     pub dead_ticks: u32,
     /// Ticks our ship has spent in a safe zone since it last entered one (0 = outside).
     pub safe_ticks: u32,
+    /// Ticks since our last flag pickup while we carry flags, and the count then.
+    flag_carry: (u32, u16),
     pub weapons: Weapons,
     pub greens: Greens,
     flag_ticks: u32,
@@ -232,6 +235,7 @@ impl Game {
             ship: None,
             dead_ticks: 0,
             safe_ticks: 0,
+            flag_carry: (0, 0),
             weapons: Weapons::default(),
             greens: Greens::default(),
             flag_ticks: 0,
@@ -290,6 +294,12 @@ impl Game {
         self.session.as_ref().and_then(|s| s.me()).map_or(0, |m| m.freq)
     }
 
+    /// Seconds left before our flags must be dropped, while we carry any (FlagDropDelay).
+    pub fn flag_drop_seconds(&self) -> Option<f32> {
+        let delay = self.world()?.1.flag_drop_delay;
+        (delay > 0 && self.flag_carry.1 > 0).then(|| delay.saturating_sub(self.flag_carry.0) as f32 / 100.0)
+    }
+
     /// "Safety Time Left" while our ship sits in a safe zone: (hours, minutes, seconds).
     pub fn safety_time_left(&self) -> Option<(u32, u32, u32)> {
         let limit = self.world()?.1.safety_limit;
@@ -298,6 +308,17 @@ impl Game {
         }
         let secs = limit.saturating_sub(self.safe_ticks) / 100;
         Some((secs / 3600, secs / 60 % 60, secs % 60))
+    }
+
+    /// F7: attach to a teammate as a turret. Turrets aren't implemented yet; with too little
+    /// bounty the original refuses with this yellow centre message (measured).
+    pub fn request_attach(&mut self) {
+        let Some((_, settings)) = self.world() else { return };
+        let Some(ship) = self.ship.as_ref().filter(|_| self.alive()) else { return };
+        if ship.bounty < settings.ships[ship.ship as usize].attach_bounty {
+            let text = "Bounty not high enough to attach.".to_string();
+            self.center_messages.push(CenterMessage { text, yellow: true, age: 0 });
+        }
     }
 
     pub fn alive(&self) -> bool {
@@ -353,7 +374,7 @@ impl Game {
         }
         let Some(s) = self.session.as_mut() else { return };
         for m in s.arena_messages.drain(..) {
-            self.center_messages.push(CenterMessage { text: m, kill: false, age: 0 });
+            self.center_messages.push(CenterMessage { text: m, yellow: false, age: 0 });
         }
         if self.ship.is_none() {
             if let Some(name) = &self.follow {
@@ -427,6 +448,14 @@ impl Game {
         let Some((map, settings)) = self.world_handles() else { return WeaponData::default() };
         let mut fired = WeaponData::default();
         let (local_pid, local_freq) = (self.local_pid(), self.local_freq());
+
+        // Flag-drop clock: restarts whenever we pick up another flag.
+        let carried = self.session.as_ref().and_then(|s| s.me()).map_or(0, |m| m.flags_carried);
+        self.flag_carry = match (carried, self.flag_carry) {
+            (0, _) => (0, 0),
+            (n, (_, before)) if n > before => (0, n),
+            (n, (t, _)) => (t + 1, n),
+        };
 
         // Our ship: respawn countdown, or movement and firing.
         if self.dead_ticks > 0 {
@@ -515,7 +544,7 @@ impl Game {
         }
         for d in deaths {
             let text = format!("{}({}) killed by: {}", d.victim_name, d.bounty, d.killer_name);
-            self.center_messages.push(CenterMessage { text, kill: true, age: 0 });
+            self.center_messages.push(CenterMessage { text, yellow: true, age: 0 });
             if d.killed == local {
                 continue; // We already showed our own explosion.
             }

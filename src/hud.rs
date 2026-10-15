@@ -62,6 +62,7 @@ pub struct Hud {
     pub show_statbox: bool,
     gradient: Texture2D,
     icons: Texture2D,
+    dropflag: Texture2D,
     icon_counts: Texture2D,
     colors: Texture2D,
     /// Radar window texture and its size.
@@ -99,6 +100,7 @@ impl Hud {
             show_statbox: false,
             gradient: load_texture(assets, "gradient"),
             icons: load_texture(assets, "Icons"),
+            dropflag: load_texture(assets, "dropflag"),
             icon_counts: load_texture(assets, "icondoor"),
             colors: load_texture(assets, "colors"),
             radar: None,
@@ -154,6 +156,14 @@ impl Hud {
             // Spectators get only the X-radar indicator (slot 4 of the right column).
             self.icon(37, sw - 26.0, (sh / 2.0).floor() - 48.0 + 4.0 * 25.0);
         }
+        if let Some(secs) = game.flag_drop_seconds() {
+            // Animated flag icon at (sw-16, 109) with the seconds left in dark red to its left
+            // (measured; the icon's animation speed is a guess).
+            let frame = ((get_time() * 10.0) as u32 % 10) as f32;
+            blit(&self.dropflag, Rect::new(frame * 16.0, 0.0, 16.0, 16.0), sw - 16.0, 109.0);
+            let text = format!("{secs:.1}");
+            self.text(&text, TextColor::DarkRed, sw - 16.0 - text.len() as f32 * FONT_W, 113.0);
+        }
         if let Some((h, m, sec)) = game.safety_time_left() {
             // Starts at the screen centre, 48 px above it (measured).
             let (x, y) = ((sw / 2.0).floor(), (sh / 2.0).floor() - 48.0);
@@ -164,7 +174,7 @@ impl Hud {
         // Centre message area: arena enter/leave lines (blue) and kills (yellow) at (sw/6, sh*0.6), newest at the bottom.
         let (cx, cy) = ((sw / 6.0).floor(), (sh * 0.6).floor());
         for (i, m) in game.center_messages.iter().enumerate() {
-            let color = if m.kill { TextColor::Yellow } else { TextColor::Blue };
+            let color = if m.yellow { TextColor::Yellow } else { TextColor::Blue };
             self.text(&m.text, color, cx, cy + i as f32 * FONT_H);
         }
     }

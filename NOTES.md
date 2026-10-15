@@ -108,7 +108,18 @@
       level (orange row seen for the Weasel's EMP bomb, so L2 = orange assumed; L1 red etc.
       unconfirmed), grey row for thors. Checked offline only — the Weasel bot got stuck behind
       the safe-zone walls on the side-by-side run. Weasel bombs are EMP (purple burst).
-      TODO: name-tag toggles, LED rows 1-2 meaning (currently 0),
+      Round 11: bomb trails CONFIRMED side by side (Weasel bomb: trail.png row 1 at the same
+      positions ~15 px apart in both). The original draws NO exhaust for remote ships (bot
+      thrusting on screen, none found) — same as ours. With Shift+Up the original still used
+      exhaust row 0 (afterburner engagement unconfirmed; ours uses row 1 with afterburner —
+      check). F-keys on the original: F3-F6/F9/F10 no visible change (no players near), F7 =
+      attach ("Bounty not high enough to attach." Yellow centre message — ours identical;
+      AttachBounty @ ship+96), F11 put the original into spectator mode (zone log). Flag carry:
+      dropflag.png (10x16px frames) at (sw-16, 109) with seconds left "28.1" DarkRed right-aligned
+      to it at y=113; from FlagDropDelay @1204, restarting on each pickup (ours matches; icon
+      animation speed and dropping at 0 not done).
+      tools/ref-rig/find_sprites.py: exact sprite matches anywhere in a capture (fast).
+      TODO: name-tag toggles (need players in view), LED rows 1-2 meaning (currently 0),
       bg sparkle objects (bg01-14), door animation, flags, LVZ, in-ship full-screen diff with
       matched state (original's ship had multiprize upgrades), Windows clock offset (uses `date`).
 
@@ -147,8 +158,8 @@
 - Rig helpers: tools/ref-rig/rx.sh (run in container, optional screenshot → ~/aicontinuum-ref/shots;
   C=aic-wine5 to target the original's container) and crop.sh. Start: `docker start aic-ref aic-wine5`,
   clear /tmp/.X99-lock, start Xvfb :99 x16, zone-restart.sh, then join5.sh in aic-wine5.
-- Next round planned: confirm bomb-trail rows side by side, afterburner/remote exhaust,
-  name-tag toggles, bg sparkles, then whole-screen in-ship diff.
+- Next round planned: whole-screen in-ship diff with matched state, afterburner exhaust row,
+  F-key toggles with a player in view, then M4 done -> gameplay items.
 - The rig's centre safe zone has wall pieces: bots chasing the original get stuck behind them.
   Move the original into open space first (Up 1.2 s, wait, Down 1.2 s).
 - After a help capture the original is left with an F1 page open: press F1 until it closes.
