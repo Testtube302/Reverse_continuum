@@ -278,6 +278,16 @@
   Claude Code's safety classifier; the container rig avoids touching the user's desktop.
 - Compare at 16 bpp: quantise both to `-depth 5`, `compare -metric AE -fuzz 4%`.
 
+## Public zone: "Testtube Test Zone"
+- Subspace Server .NET 4.0.0 on tor-vm (apollo VM 192.168.122.50, public 47.207.117.75 via 1:1 NAT),
+  UDP 5000 game / 5001 ping, systemd `sszone.service`, install /opt/sszone. Continuum encryption
+  (EncryptionContNative) and VIE encryption both loaded, so either client type can join.
+- Published to sscentral.sscuservers.net, sscentral.trenchwars.org, subspace.gamespec.org and
+  directory.poid.be. Names starting "SSC" are reserved by the directory servers, hence no prefix.
+- Verified 2026-10-15: original Continuum's View → Zones → Download lists it with its IP, port and
+  description; AIContinuum joined through the public address from the home LAN.
+- VMs on apollo can't reach the public address (no hairpin NAT); use 192.168.122.50 from inside.
+
 ## Open items
 - Debug text overlay + macroquad text labels in main.rs are temporary until the real HUD (M4).
 - Haven't yet run the original Continuum.exe under Wine against the local zone (integration phase).
