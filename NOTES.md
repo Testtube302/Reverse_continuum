@@ -315,4 +315,21 @@
   `01 <min players u32>`, reply `01` + entries `ip[4] port u16 players u16 billing u16
   version u32 name[64] description\0` (sharvil/subspace starlight ConfigDialog.cpp). Live:
   sscuservers, trenchwars, poid.be (ssdir.playsubspace.com is dead).
-- The zones/profile dialogs are functional stand-ins; the original's are Win32 dialogs (next).
+- Window = Windows menu bar (19 px, Tahoma 8, measured item x positions, underlined mnemonics,
+  menus not functional yet) + skin. 0 differing pixels for the whole 640x515 window.
+- Dialogs (src/dialog.rs) are built from the DLGTEMPLATEs in `menu040.dll` (Add/Update Zones 104,
+  Select/Edit Profile 118, Password Required 142, ...): dialog units with MS Sans Serif 8
+  (base 6x13, MulDiv), modal frame 3 px, caption 19 px, centred on the original's whole window
+  (our coords (-2,-21)-(640,515)), clamped into our window (Zones moves down 6 px).
+  Drawn like Wine 5.5 classic controls with Wine's bitmap fonts (third_party/wine-fonts, LGPL,
+  from tools/fonts/extract_wine_fonts.py). Measured vs the original: Profile 7 px differ,
+  Password 81 px (caption gradient, reference is 16-bit dithered), Zones differs only by data
+  (we list live directory servers; the original's defaults are dead).
+  - caption gradient (10,36,106)->(166,202,240) over width-18, then end colour; title Tahoma Bold
+    at caption+5; close box X is Marlett with fixed grey anti-aliasing.
+  - checkbox box 1 px above the centred label, label at +13+3+1; edit text at (+3,+3);
+    push text centred with (h-13+1)/2; BS_LEFT text at +2; WS_EX_STATICEDGE = 1 px sunken
+    ring; combo text at (+4,+4); disabled text embossed; focus rect XOR dotted.
+  - Zones list is owner-drawn by Continuum: selection (0,0,128), selected text (128,255,128),
+    shown zones bold (synthetic: glyphs again 1 px right, advance +1), others (128,128,128);
+    players right-aligned ending x+30, name at x+43 from the list's inner left.

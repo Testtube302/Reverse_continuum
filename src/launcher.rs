@@ -12,7 +12,9 @@ use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
 use std::time::{Duration, Instant};
 
 use crate::assets::RgbaImage;
+use crate::dialog::{self, Dialog, Event, IDCANCEL, IDOK, Item, Template};
 use crate::skin::{Hotspot, Rect, Skin, Step};
+use crate::winfont::{BitmapFont, TAHOMA_8};
 
 pub const GLYPH_W: i32 = 8;
 pub const GLYPH_H: i32 = 12;
@@ -393,14 +395,40 @@ pub struct Canvas {
     pub w: i32,
     pub h: i32,
     pub px: Vec<u8>,
+    /// Added to every coordinate (the skin is drawn below the menu bar).
+    pub origin: (i32, i32),
+    /// Optional clip rectangle (x0, y0, x1, y1 inclusive) in canvas coordinates.
+    pub clip: Option<(i32, i32, i32, i32)>,
 }
 
 impl Canvas {
     pub fn new(w: i32, h: i32) -> Self {
-        Self { w, h, px: vec![0; (w * h * 4) as usize] }
+        Self { w, h, px: vec![0; (w * h * 4) as usize], origin: (0, 0), clip: None }
+    }
+
+    /// Inverts a pixel (XOR with white), as Windows draws focus rectangles.
+    pub fn invert(&mut self, x: i32, y: i32) {
+        let (x, y) = (x + self.origin.0, y + self.origin.1);
+        if self.clipped(x, y) {
+            return;
+        }
+        if x >= 0 && y >= 0 && x < self.w && y < self.h {
+            let o = ((y * self.w + x) * 4) as usize;
+            for k in 0..3 {
+                self.px[o + k] = 255 - self.px[o + k];
+            }
+        }
+    }
+
+    fn clipped(&self, x: i32, y: i32) -> bool {
+        self.clip.is_some_and(|(x0, y0, x1, y1)| x < x0 || y < y0 || x > x1 || y > y1)
     }
 
     pub fn put(&mut self, x: i32, y: i32, c: [u8; 3]) {
+        let (x, y) = (x + self.origin.0, y + self.origin.1);
+        if self.clipped(x, y) {
+            return;
+        }
         if x >= 0 && y >= 0 && x < self.w && y < self.h {
             let o = ((y * self.w + x) * 4) as usize;
             self.px[o..o + 4].copy_from_slice(&[c[0], c[1], c[2], 255]);
@@ -492,52 +520,85 @@ pub enum Action {
     Quit,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-enum Field {
-    Name,
+/// Height of the Windows menu bar above the skin.
+pub const MENU_H: i32 = 19;
+/// The original's menu bar items and where Wine puts their text.
+const MENU_ITEMS: [(&str, i32); 7] =
+    [("&Game", 7), ("&View", 49), ("&Navigate", 87), ("&Resolution", 147), ("&Skin", 213), ("&Web Links && News", 250), ("&Help", 354)];
+
+// Dialog template ids and control ids in menu040.dll.
+const DLG_ZONES: u32 = 104;
+const DLG_PROFILE: u32 = 118;
+const DLG_PASSWORD: u32 = 142;
+const ZONES_LIST: i32 = 1004;
+const ZONES_SORT: i32 = 1215;
+const ZONES_ADD_REMOVE: i32 = 1020;
+const ZONES_DOWNLOAD: i32 = 1019;
+const ZONES_MIN_PLAYERS: i32 = 1002;
+const ZONES_SERVERS: i32 = 1111;
+const ZONES_DESCRIPTION: i32 = 1005;
+const ZONES_STATUS: i32 = 1165;
+const PROF_LIST: i32 = 1020;
+const PROF_NAME: i32 = 1021;
+const PROF_PLAYER: i32 = 1022;
+const PROF_PASSWORD: i32 = 1023;
+const PROF_SHIP: i32 = 1024;
+const PROF_RESOLUTION: i32 = 1031;
+const PROF_REFRESH: i32 = 1194;
+const PROF_WINDOW: i32 = 1032;
+const PROF_ZONE: i32 = 1004;
+const PROF_MACROS: i32 = 1026;
+const PROF_KEYS: i32 = 1027;
+const PROF_TARGET: i32 = 1043;
+const PROF_CHATS: i32 = 1042;
+const PROF_MOVE_UP: i32 = 1202;
+const PROF_MOVE_DOWN: i32 = 1203;
+const PASS_EDIT: i32 = 1023;
+const PASS_SAVE: i32 = 1201;
+
+const ZONE_TEXT_GREY: [u8; 3] = [128, 128, 128];
+const ZONE_TEXT_SHOWN: [u8; 3] = [0, 128, 0];
+const ZONE_TEXT_SELECTED: [u8; 3] = [128, 255, 128];
+const ZONE_SELECTION: [u8; 3] = [0, 0, 128];
+
+enum Kind {
+    Zones(ZonesDialog),
+    Profile,
     Password,
 }
 
-enum Dialog {
-    /// Name and password; `then_play` continues to the zone afterwards.
-    Profile { name: String, password: String, save: bool, focus: Field, then_play: bool },
-    Zones(ZonesDialog),
+struct Open {
+    kind: Kind,
+    d: Dialog,
 }
 
 struct ZonesDialog {
     zones: Vec<Zone>,
-    selected: Option<usize>,
-    scroll: usize,
-    servers: String,
-    status: String,
     download: Option<std::sync::mpsc::Receiver<Result<Vec<DirZone>, String>>>,
 }
 
-impl ZonesDialog {
-    /// Downloads from every listed directory server on a worker thread, merging what answers.
-    fn start_download(&mut self) {
-        let servers: Vec<String> = self.servers.split_whitespace().map(String::from).collect();
-        let (tx, rx) = std::sync::mpsc::channel();
-        self.status = "Downloading zone list...".into();
-        self.download = Some(rx);
-        std::thread::spawn(move || {
-            let mut all: Vec<DirZone> = Vec::new();
-            let mut err = String::from("no directory server answered");
-            for s in &servers {
-                match download_directory(s, Duration::from_secs(6)) {
-                    Ok(found) => {
-                        for f in found {
-                            if !all.iter().any(|a| a.name.eq_ignore_ascii_case(&f.name)) {
-                                all.push(f);
-                            }
+/// Downloads from every listed directory server on a worker thread, merging what answers.
+fn start_download(servers: &str) -> std::sync::mpsc::Receiver<Result<Vec<DirZone>, String>> {
+    let servers: Vec<String> = servers.split_whitespace().map(String::from).collect();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut all: Vec<DirZone> = Vec::new();
+        let mut err = String::from("No directory server answered.");
+        for s in &servers {
+            match download_directory(s, Duration::from_secs(6)) {
+                Ok(found) => {
+                    for f in found {
+                        if !all.iter().any(|a| a.name.eq_ignore_ascii_case(&f.name)) {
+                            all.push(f);
                         }
                     }
-                    Err(e) => err = e,
                 }
+                Err(e) => err = e,
             }
-            let _ = tx.send(if all.is_empty() { Err(err) } else { Ok(all) });
-        });
-    }
+        }
+        let _ = tx.send(if all.is_empty() { Err(err) } else { Ok(all) });
+    });
+    rx
 }
 
 pub const DEFAULT_DIRECTORY_SERVERS: &str =
@@ -557,13 +618,25 @@ pub struct Launcher {
     started: Instant,
     mouse: (i32, i32),
     right_down: bool,
-    dialog: Option<Dialog>,
+    dialog: Option<Open>,
+    templates: Vec<Template>,
+    menu_font: BitmapFont,
+    /// Directory servers for the zones dialog.
+    pub servers: String,
     /// Set whenever profile or zones change; the frontend saves and clears it.
     pub dirty: bool,
 }
 
 impl Launcher {
-    pub fn new(skin: Skin, spectate_icon: RgbaImage, ships: RgbaImage, font: RgbaImage, profile: Profile, zones: Vec<Zone>) -> Self {
+    pub fn new(
+        skin: Skin,
+        spectate_icon: RgbaImage,
+        ships: RgbaImage,
+        font: RgbaImage,
+        templates: Vec<Template>,
+        profile: Profile,
+        zones: Vec<Zone>,
+    ) -> Self {
         let mut l = Self {
             skin,
             spectate_icon,
@@ -578,6 +651,9 @@ impl Launcher {
             mouse: (-1, -1),
             right_down: false,
             dialog: None,
+            templates,
+            menu_font: BitmapFont::parse(TAHOMA_8).expect("built-in font"),
+            servers: DEFAULT_DIRECTORY_SERVERS.into(),
             dirty: false,
         };
         let want = l.profile.get("zone").to_string();
@@ -585,8 +661,15 @@ impl Launcher {
         l
     }
 
+    /// Window size: the menu bar plus the skin's main region.
     pub fn size(&self) -> (i32, i32) {
-        (self.skin.main.w(), self.skin.main.h())
+        (self.skin.main.w(), self.skin.main.h() + MENU_H)
+    }
+
+    /// The original's whole window (frame, title and menu) in our coordinates; dialogs centre on it.
+    fn parent_frame(&self) -> Rect {
+        let (w, h) = self.size();
+        Rect { x0: -2, y0: -21, x1: w, y1: h }
     }
 
     /// Indexes into `zones` of the entries on the main list.
@@ -627,7 +710,8 @@ impl Launcher {
 
     /// Handles one frame of input; returns what the frontend should do.
     pub fn update(&mut self, input: &Input) -> Option<Action> {
-        self.mouse = input.mouse;
+        // Main-screen coordinates are relative to the skin, below the menu bar.
+        self.mouse = (input.mouse.0, input.mouse.1 - MENU_H);
         self.right_down = input.right_down;
         let shown = self.shown();
         // Ping only what's on the main list.
@@ -640,7 +724,7 @@ impl Launcher {
         if self.dialog.is_some() {
             return self.update_dialog(input);
         }
-        let (mx, my) = input.mouse;
+        let (mx, my) = self.mouse;
         let rows = self.rows();
         let max_scroll = shown.len().saturating_sub(rows);
         if input.wheel != 0 && self.rect("zonebox").is_some_and(|r| r.contains(mx, my)) {
@@ -660,7 +744,7 @@ impl Launcher {
             "play" => return self.play(),
             "quit" => return Some(Action::Quit),
             "spectate" => self.set_ship(8),
-            "profile" | "proftext" | "profbox" => self.open_profile(false),
+            "profile" => self.open_profile(),
             "zones" => self.open_zones(),
             "zoneup" => self.scroll = self.scroll.saturating_sub(1),
             "zonedown" => self.scroll = (self.scroll + 1).min(max_scroll),
@@ -684,18 +768,16 @@ impl Launcher {
         None
     }
 
-    /// Opens a dialog by name ("zones", "profile", "password"); used by test aids.
+    /// Opens a dialog by name ("zones", "zones-download", "profile", "password"); test aid.
     pub fn open(&mut self, which: &str) {
         match which {
             "zones" => self.open_zones(),
             "zones-download" => {
                 self.open_zones();
-                if let Some(Dialog::Zones(d)) = &mut self.dialog {
-                    d.start_download();
-                }
+                self.zones_command(ZONES_DOWNLOAD);
             }
-            "profile" => self.open_profile(false),
-            "password" => self.open_profile(true),
+            "profile" => self.open_profile(),
+            "password" => self.open_password(),
             _ => {}
         }
     }
@@ -705,23 +787,73 @@ impl Launcher {
         self.dirty = true;
     }
 
-    fn open_profile(&mut self, then_play: bool) {
-        let name = self.profile.get("name").to_string();
-        let password = self.profile.get("password").to_string();
-        let save = !password.is_empty();
-        let focus = if then_play { Field::Password } else { Field::Name };
-        self.dialog = Some(Dialog::Profile { name, password, save, focus, then_play });
+    fn new_dialog(&self, id: u32) -> Option<Dialog> {
+        let t = self.templates.iter().find(|t| t.id == id)?;
+        let mut d = Dialog::new(t, self.parent_frame());
+        let (w, h) = self.size();
+        d.clamp_into(w, h);
+        Some(d)
+    }
+
+    fn open_password(&mut self) {
+        let Some(mut d) = self.new_dialog(DLG_PASSWORD) else { return };
+        d.focus_id(PASS_EDIT);
+        self.dialog = Some(Open { kind: Kind::Password, d });
+    }
+
+    fn open_profile(&mut self) {
+        let Some(mut d) = self.new_dialog(DLG_PROFILE) else { return };
+        let p = &self.profile;
+        let name = |k: &str, default: &str| if p.get(k).is_empty() { default.to_string() } else { p.get(k).to_string() };
+        if let Some(c) = d.control_mut(PROF_LIST) {
+            c.items = vec![Item::text(&name("profile", "Default"))];
+            c.sel = Some(0);
+        }
+        d.set_text(PROF_NAME, &name("profile", "Default"));
+        d.set_text(PROF_PLAYER, p.get("name"));
+        d.set_text(PROF_PASSWORD, p.get("password"));
+        let combo = |d: &mut Dialog, id: i32, items: &[&str], sel: usize| {
+            if let Some(c) = d.control_mut(id) {
+                c.items = items.iter().map(|s| Item::text(s)).collect();
+                c.sel = Some(sel.min(items.len().saturating_sub(1)));
+            }
+        };
+        let ships: Vec<&str> = SHIP_NAMES.iter().copied().chain(["Spectate"]).collect();
+        combo(&mut d, PROF_SHIP, &ships, p.ship() as usize);
+        combo(&mut d, PROF_RESOLUTION, &["1024 x 768 x 16"], 0);
+        combo(&mut d, PROF_REFRESH, &["<default>"], 0);
+        combo(&mut d, PROF_WINDOW, &["Full Screen", "Window"], if p.get("windowed") == "1" { 1 } else { 0 });
+        let zone_names: Vec<String> = std::iter::once("<default>".to_string()).chain(self.zones.iter().filter(|z| z.shown).map(|z| z.name.clone())).collect();
+        let zone_refs: Vec<&str> = zone_names.iter().map(|s| s.as_str()).collect();
+        let zsel = zone_names.iter().position(|n| n == p.get("zone")).unwrap_or(0);
+        combo(&mut d, PROF_ZONE, &zone_refs, zsel);
+        combo(&mut d, PROF_MACROS, &[&name("macros", "Default")], 0);
+        combo(&mut d, PROF_KEYS, &[&name("keyboard", "Default")], 0);
+        d.set_text(PROF_TARGET, p.get("target").trim_start_matches("-1"));
+        d.set_text(PROF_CHATS, p.get("chat"));
+        for id in [PROF_MOVE_UP, PROF_MOVE_DOWN] {
+            if let Some(c) = d.control_mut(id) {
+                c.enabled = false;
+            }
+        }
+        d.focus_id(PROF_LIST);
+        self.dialog = Some(Open { kind: Kind::Profile, d });
     }
 
     fn open_zones(&mut self) {
-        self.dialog = Some(Dialog::Zones(ZonesDialog {
-            zones: self.zones.clone(),
-            selected: None,
-            scroll: 0,
-            servers: DEFAULT_DIRECTORY_SERVERS.into(),
-            status: String::new(),
-            download: None,
-        }));
+        let Some(mut d) = self.new_dialog(DLG_ZONES) else { return };
+        d.set_text(ZONES_MIN_PLAYERS, "0");
+        d.set_text(ZONES_SERVERS, &self.servers);
+        let zones = self.zones.clone();
+        let current = self.shown().get(self.selected.unwrap_or(usize::MAX)).map(|&i| self.zones[i].name.clone());
+        let sel = current.and_then(|n| zones.iter().position(|z| z.name == n)).or(if zones.is_empty() { None } else { Some(0) });
+        if let Some(c) = d.control_mut(ZONES_LIST) {
+            c.sel = sel;
+        }
+        d.focus_id(IDOK);
+        let mut open = Open { kind: Kind::Zones(ZonesDialog { zones, download: None }), d };
+        refresh_zones(&mut open);
+        self.dialog = Some(open);
     }
 
     /// Same as clicking PLAY (test aid).
@@ -729,12 +861,16 @@ impl Launcher {
         self.play()
     }
 
-    fn play(&mut self) -> Option<Action> {
+    fn selected_zone(&self) -> Option<Zone> {
         let shown = self.shown();
-        let zone = self.zones.get(*shown.get(self.selected?)?)?.clone();
+        self.zones.get(*shown.get(self.selected?)?).cloned()
+    }
+
+    fn play(&mut self) -> Option<Action> {
+        let zone = self.selected_zone()?;
         let password = self.profile.get("password").to_string();
         if password.is_empty() {
-            self.open_profile(true);
+            self.open_password();
             return None;
         }
         self.play_with(&zone, password)
@@ -751,101 +887,117 @@ impl Launcher {
         })
     }
 
-    fn update_dialog(&mut self, input: &Input) -> Option<Action> {
-        let (mx, my) = input.mouse;
-        let layout = DialogLayout::new(self.size());
-        match self.dialog.as_mut()? {
-            Dialog::Profile { name, password, save, focus, then_play } => {
-                let field = if *focus == Field::Name { &mut *name } else { &mut *password };
-                for &ch in &input.chars {
-                    if (' '..='~').contains(&ch) && field.len() < 23 {
-                        field.push(ch);
-                    }
+    fn zones_command(&mut self, id: i32) {
+        let Some(Open { kind: Kind::Zones(z), d }) = self.dialog.as_mut() else { return };
+        match id {
+            ZONES_DOWNLOAD if z.download.is_none() => {
+                self.servers = d.text(ZONES_SERVERS);
+                z.download = Some(start_download(&self.servers));
+                d.set_text(ZONES_STATUS, "Downloading...");
+                if let Some(c) = d.control_mut(ZONES_DOWNLOAD) {
+                    c.enabled = false;
                 }
-                if input.backspace {
-                    field.pop();
-                }
-                if input.tab {
-                    *focus = if *focus == Field::Name { Field::Password } else { Field::Name };
-                }
-                let p = &layout.profile;
-                let mut ok = input.enter;
-                let mut cancel = input.escape;
-                if input.left_pressed {
-                    if p.name.contains(mx, my) {
-                        *focus = Field::Name;
-                    } else if p.password.contains(mx, my) {
-                        *focus = Field::Password;
-                    } else if p.save.contains(mx, my) {
-                        *save = !*save;
-                    } else if p.ok.contains(mx, my) {
-                        ok = true;
-                    } else if p.cancel.contains(mx, my) {
-                        cancel = true;
-                    }
-                }
-                if cancel {
-                    self.dialog = None;
-                } else if ok && !name.trim().is_empty() && (!*then_play || !password.is_empty()) {
-                    let (name, password, save, then_play) = (name.trim().to_string(), password.clone(), *save, *then_play);
-                    self.dialog = None;
-                    self.profile.set("name", &name);
-                    self.profile.set("password", if save { &password } else { "" });
-                    self.dirty = true;
-                    if then_play {
-                        let shown = self.shown();
-                        let zone = self.zones.get(*shown.get(self.selected?)?)?.clone();
-                        return self.play_with(&zone, password);
+            }
+            ZONES_ADD_REMOVE => {
+                if let Some(i) = d.control(ZONES_LIST).and_then(|c| c.sel) {
+                    if let Some(zone) = z.zones.get_mut(i) {
+                        zone.shown = !zone.shown;
                     }
                 }
             }
-            Dialog::Zones(d) => {
-                if let Some(rx) = &d.download {
-                    if let Ok(result) = rx.try_recv() {
-                        d.download = None;
-                        match result {
-                            Ok(found) => {
-                                let before = d.zones.len();
-                                merge_directory(&mut d.zones, &found);
-                                d.status = format!("Downloaded {} zones ({} new).", found.len(), d.zones.len() - before);
-                            }
-                            Err(e) => d.status = e,
+            _ => {}
+        }
+        if let Some(open) = self.dialog.as_mut() {
+            refresh_zones(open);
+        }
+    }
+
+    fn update_dialog(&mut self, input: &Input) -> Option<Action> {
+        let open = self.dialog.as_mut()?;
+        // Finished downloads.
+        if let Kind::Zones(z) = &mut open.kind {
+            if let Some(result) = z.download.as_ref().and_then(|rx| rx.try_recv().ok()) {
+                z.download = None;
+                let min: u32 = open.d.text(ZONES_MIN_PLAYERS).parse().unwrap_or(0);
+                let status = match result {
+                    Ok(found) => {
+                        let found: Vec<DirZone> = found.into_iter().filter(|f| f.players as u32 >= min).collect();
+                        let before = z.zones.len();
+                        merge_directory(&mut z.zones, &found);
+                        if open.d.checked(ZONES_SORT) {
+                            z.zones.sort_by_key(|z| z.name.to_ascii_lowercase());
                         }
+                        format!("{} zones downloaded, {} new.", found.len(), z.zones.len() - before)
                     }
+                    Err(e) => e,
+                };
+                open.d.set_text(ZONES_STATUS, &status);
+                if let Some(c) = open.d.control_mut(ZONES_DOWNLOAD) {
+                    c.enabled = true;
                 }
-                let z = &layout.zones;
-                let rows = z.rows();
-                if input.wheel != 0 && z.list.contains(mx, my) {
-                    let max = d.zones.len().saturating_sub(rows) as i32;
-                    d.scroll = (d.scroll as i32 - input.wheel * 3).clamp(0, max.max(0)) as usize;
-                }
-                let mut ok = input.enter;
-                let cancel = input.escape;
-                if input.left_pressed {
-                    if let Some(row) = z.row_at(mx, my).map(|r| r + d.scroll).filter(|&r| r < d.zones.len()) {
-                        d.selected = Some(row);
-                        if input.double_click {
-                            d.zones[row].shown = !d.zones[row].shown;
-                        }
-                    } else if z.download.contains(mx, my) && d.download.is_none() {
-                        d.start_download();
-                    } else if z.remove.contains(mx, my) {
-                        if let Some(i) = d.selected.take().filter(|&i| i < d.zones.len()) {
-                            d.zones.remove(i);
-                        }
-                    } else if z.ok.contains(mx, my) {
-                        ok = true;
-                    } else if z.cancel.contains(mx, my) {
-                        self.dialog = None;
-                        return None;
-                    }
-                }
-                if cancel {
+                refresh_zones(open);
+            }
+        }
+        let events = open.d.handle(input);
+        let keep = self.selected_zone().map(|z| z.name);
+        for ev in events {
+            let Some(open) = self.dialog.as_mut() else { break };
+            match (&mut open.kind, ev) {
+                (_, Event::Command(IDCANCEL)) => {
                     self.dialog = None;
-                } else if ok {
-                    let mut zones = std::mem::take(&mut d.zones);
+                }
+                (Kind::Password, Event::Command(IDOK)) => {
+                    let password = open.d.text(PASS_EDIT);
+                    if password.is_empty() {
+                        continue;
+                    }
+                    if open.d.checked(PASS_SAVE) {
+                        self.profile.set("password", &password);
+                        self.dirty = true;
+                    }
+                    self.dialog = None;
+                    let zone = self.selected_zone()?;
+                    return self.play_with(&zone, password);
+                }
+                (Kind::Profile, Event::Command(IDOK)) => {
+                    let d = &open.d;
+                    let sel = |id: i32| d.control(id).and_then(|c| c.sel).unwrap_or(0);
+                    let player = d.text(PROF_PLAYER).trim().to_string();
+                    let profile = d.text(PROF_NAME).trim().to_string();
+                    let password = d.text(PROF_PASSWORD);
+                    let ship = sel(PROF_SHIP);
+                    let windowed = sel(PROF_WINDOW);
+                    let zone = d.control(PROF_ZONE).and_then(|c| c.sel.and_then(|s| c.items.get(s))).map(|i| i.runs[0].1.clone());
+                    let chats = d.text(PROF_CHATS);
+                    let target = d.text(PROF_TARGET);
+                    let p = &mut self.profile;
+                    if !profile.is_empty() {
+                        p.set("profile", &profile);
+                    }
+                    if !player.is_empty() {
+                        p.set("name", &player);
+                    }
+                    p.set("password", &password);
+                    p.set("ship", &ship.to_string());
+                    p.set("windowed", &windowed.to_string());
+                    p.set("chat", &chats);
+                    p.set("target", if target.is_empty() { "-1" } else { &target });
+                    if let Some(z) = zone {
+                        p.set("zone", if z == "<default>" { "" } else { &z });
+                    }
+                    self.dirty = true;
+                    self.dialog = None;
+                    // The zone choice also selects it on the main list.
+                    let want = self.profile.get("zone").to_string();
+                    if let Some(row) = self.shown().iter().position(|&i| self.zones[i].name == want) {
+                        self.selected = Some(row);
+                    }
+                }
+                (Kind::Zones(z), Event::Command(IDOK)) => {
+                    let mut zones = std::mem::take(&mut z.zones);
                     zones.sort_by_key(|z| z.name.to_ascii_lowercase());
-                    let keep = self.shown().get(self.selected.unwrap_or(usize::MAX)).map(|&i| self.zones[i].name.clone());
+                    let keep = keep.clone();
+                    self.servers = open.d.text(ZONES_SERVERS);
                     self.zones = zones;
                     self.dialog = None;
                     self.dirty = true;
@@ -855,6 +1007,25 @@ impl Launcher {
                         .and_then(|n| shown.iter().position(|&i| self.zones[i].name == n))
                         .or(if shown.is_empty() { None } else { Some(0) });
                 }
+                (Kind::Zones(z), Event::DoubleClick(ZONES_LIST, row)) => {
+                    if let Some(zone) = z.zones.get_mut(row) {
+                        zone.shown = !zone.shown;
+                    }
+                    refresh_zones(open);
+                }
+                (Kind::Zones(_), Event::Select(ZONES_LIST, _)) => refresh_zones(open),
+                (Kind::Zones(z), Event::Command(ZONES_SORT)) => {
+                    if open.d.checked(ZONES_SORT) {
+                        let sel = open.d.control(ZONES_LIST).and_then(|c| c.sel).and_then(|i| z.zones.get(i)).map(|z| z.name.clone());
+                        z.zones.sort_by_key(|z| z.name.to_ascii_lowercase());
+                        if let Some(c) = open.d.control_mut(ZONES_LIST) {
+                            c.sel = sel.and_then(|n| z.zones.iter().position(|z| z.name == n));
+                        }
+                    }
+                    refresh_zones(open);
+                }
+                (Kind::Zones(_), Event::Command(id)) => self.zones_command(id),
+                _ => {}
             }
         }
         None
@@ -866,6 +1037,9 @@ impl Launcher {
 
     /// Draws the whole screen.
     pub fn draw(&self, c: &mut Canvas) {
+        c.origin = (0, 0);
+        self.draw_menu_bar(c);
+        c.origin = (0, MENU_H);
         let main = self.skin.main;
         c.blit(&self.skin.image, main.x0, main.y0, main.w(), main.h(), 0, 0);
         let (mx, my) = self.mouse;
@@ -951,74 +1125,80 @@ impl Launcher {
                 self.font.draw(c, line, BAND_YELLOW, mid - line.len() as i32 * GLYPH_W / 2, y);
             }
         }
-        if let Some(d) = &self.dialog {
-            self.draw_dialog(c, d);
+        c.origin = (0, 0);
+        if let Some(open) = &self.dialog {
+            open.d.draw(c);
         }
     }
 
-    fn draw_dialog(&self, c: &mut Canvas, d: &Dialog) {
-        let layout = DialogLayout::new(self.size());
-        let f = &self.font;
-        match d {
-            Dialog::Profile { name, password, save, focus, then_play } => {
-                let p = &layout.profile;
-                let title = if *then_play { "Password Required" } else { "Profile" };
-                window(c, f, p.frame, title);
-                f.draw_flat(c, "Name:", BLACK, p.frame.x0 + 12, p.name.y0 + 3);
-                f.draw_flat(c, "Password:", BLACK, p.frame.x0 + 12, p.password.y0 + 3);
-                let stars: String = "*".repeat(password.len());
-                edit(c, f, p.name, name, *focus == Field::Name);
-                edit(c, f, p.password, &stars, *focus == Field::Password);
-                checkbox(c, f, p.save, "Save password", *save);
-                button(c, f, p.ok, if *then_play { "Play" } else { "OK" });
-                button(c, f, p.cancel, "Cancel");
-            }
-            Dialog::Zones(d) => {
-                let z = &layout.zones;
-                window(c, f, z.frame, "Add/Update Zones");
-                f.draw_flat(c, "# Players  Zone Name", BLACK, z.list.x0, z.list.y0 - 14);
-                sunken(c, z.list, WHITE);
-                for (row, zone) in d.zones.iter().enumerate().skip(d.scroll).take(z.rows()) {
-                    let y = z.list.y0 + 2 + (row - d.scroll) as i32 * 14;
-                    if d.selected == Some(row) {
-                        c.fill(z.list.x0 + 2, y - 1, z.list.w() - 4, 14, NAVY);
-                    }
-                    let color = if d.selected == Some(row) { WHITE } else if zone.shown { GREEN } else { GREY_TEXT };
-                    let players = zone.players.map_or(String::new(), |p| p.to_string());
-                    let line: String =
-                        format!("{players:>4}  {}", zone.name).chars().take(((z.list.w() - 8) / GLYPH_W) as usize).collect();
-                    f.draw_flat(c, &line, color, z.list.x0 + 4, y);
+    /// The Windows menu bar: face colour, Tahoma 8 items with underlined mnemonics.
+    fn draw_menu_bar(&self, c: &mut Canvas) {
+        let (w, _) = self.size();
+        c.fill(0, 0, w, MENU_H, dialog::FACE);
+        let f = &self.menu_font;
+        for (label, x) in MENU_ITEMS {
+            let mut pen = x;
+            let mut chars = label.chars();
+            while let Some(ch) = chars.next() {
+                let (ch, underline) = match ch {
+                    '&' => match chars.next() {
+                        Some('&') => ('&', false),
+                        next => (next.unwrap_or(' '), true),
+                    },
+                    _ => (ch, false),
+                };
+                let s = ch.to_string();
+                let next = f.draw(&s, pen, 6, |px, py| c.put(px, py, dialog::TEXT));
+                if underline {
+                    c.fill(pen, 6 + f.ascent + 1, next - pen - 1, 1, dialog::TEXT);
                 }
-                group(c, f, z.desc, "Zone Description");
-                if let Some(zone) = d.selected.and_then(|i| d.zones.get(i)) {
-                    let mut text = vec![
-                        format!("Players: {}", zone.players.map_or("?".into(), |p| p.to_string())),
-                        format!("IP: {}", zone.ip),
-                        format!("Port: {}", zone.port),
-                        String::new(),
-                    ];
-                    text.extend(wrap(&zone.description, ((z.desc.w() - 16) / GLYPH_W) as usize));
-                    for (i, line) in text.iter().enumerate() {
-                        let y = z.desc.y0 + 18 + i as i32 * 14;
-                        if y + GLYPH_H > z.desc.y1 {
-                            break;
-                        }
-                        f.draw_flat(c, line, BLACK, z.desc.x0 + 8, y);
-                    }
-                }
-                f.draw_flat(c, "Double-click a zone to show or hide it.", BLACK, z.list.x0, z.list.y1 + 6);
-                button(c, f, z.remove, "Remove Zone");
-                group(c, f, z.dl_group, "Download New Zones");
-                button(c, f, z.download, if d.download.is_some() { "Working..." } else { "Download" });
-                f.draw_flat(c, &d.status, BLACK, z.download.x1 + 10, z.download.y0 + 6);
-                f.draw_flat(c, "Directory servers:", BLACK, z.dl_group.x0 + 10, z.download.y1 + 8);
-                let servers: String = d.servers.chars().take(((z.dl_group.w() - 20) / GLYPH_W) as usize).collect();
-                f.draw_flat(c, &servers, BLACK, z.dl_group.x0 + 10, z.download.y1 + 22);
-                button(c, f, z.ok, "OK");
-                button(c, f, z.cancel, "Cancel");
+                pen = next;
             }
         }
     }
+}
+
+/// Rebuilds the zones dialog's owner-drawn list, its description panel and the add/remove
+/// button label from the current state.
+fn refresh_zones(open: &mut Open) {
+    let Kind::Zones(z) = &open.kind else { return };
+    let d = &mut open.d;
+    let sel = d.control(ZONES_LIST).and_then(|c| c.sel);
+    let items: Vec<Item> = z
+        .zones
+        .iter()
+        .map(|zone| {
+            let players = zone.players.map_or(String::new(), |p| p.to_string());
+            let color = if zone.shown { ZONE_TEXT_SHOWN } else { ZONE_TEXT_GREY };
+            let px = 30 - dialog_font_width(&players);
+            let runs = vec![(px, players.clone(), color), (43, zone.name.clone(), color)];
+            let selected_runs = vec![(px, players, ZONE_TEXT_SELECTED), (43, zone.name.clone(), ZONE_TEXT_SELECTED)];
+            Item { runs, selected_runs }
+        })
+        .collect();
+    if let Some(c) = d.control_mut(ZONES_LIST) {
+        c.items = items;
+        c.highlight = Some(ZONE_SELECTION);
+        c.bold = z.zones.iter().map(|z| z.shown).collect();
+    }
+    let desc = sel.and_then(|i| z.zones.get(i)).map(|zone| {
+        let players = zone.players.map_or("?".to_string(), |p| p.to_string());
+        let mut s = format!("Players: {players}\nIP: {}\nPort: {}\n", zone.ip, zone.port);
+        if zone.players.is_none() {
+            s += "Updated: zone may be down or no longer exist\n";
+        }
+        s + "\n" + &zone.description
+    });
+    d.set_text(ZONES_DESCRIPTION, &desc.unwrap_or_default());
+    let shown = sel.and_then(|i| z.zones.get(i)).is_some_and(|z| z.shown);
+    d.set_text(ZONES_ADD_REMOVE, if shown { "Remove &Zone(s)" } else { "Add &Zone" });
+}
+
+fn dialog_font_width(s: &str) -> i32 {
+    thread_local! {
+        static FONT: BitmapFont = BitmapFont::parse(crate::winfont::MS_SANS_SERIF_8).expect("built-in font");
+    }
+    FONT.with(|f| f.width(s))
 }
 
 fn step_at(steps: &[Step], tick: u32) -> Option<(i32, i32)> {
@@ -1034,144 +1214,6 @@ fn step_at(steps: &[Step], tick: u32) -> Option<(i32, i32)> {
         t -= s.ticks;
     }
     None
-}
-
-// ---------------------------------------------------------------------------------------------
-// Dialog look: Windows "classic" controls (grey faces, white/dark 3D edges, navy title).
-
-const FACE: [u8; 3] = [212, 208, 200];
-const LIGHT: [u8; 3] = [255, 255, 255];
-const SHADOW: [u8; 3] = [128, 128, 128];
-const DARK: [u8; 3] = [64, 64, 64];
-const BLACK: [u8; 3] = [0, 0, 0];
-const WHITE: [u8; 3] = [255, 255, 255];
-const NAVY: [u8; 3] = [10, 36, 106];
-const GREEN: [u8; 3] = [0, 128, 0];
-const GREY_TEXT: [u8; 3] = [96, 96, 96];
-
-fn r(x0: i32, y0: i32, w: i32, h: i32) -> Rect {
-    Rect { x0, y0, x1: x0 + w - 1, y1: y0 + h - 1 }
-}
-
-fn bevel(c: &mut Canvas, b: Rect, tl: [u8; 3], br: [u8; 3]) {
-    c.fill(b.x0, b.y0, b.w(), 1, tl);
-    c.fill(b.x0, b.y0, 1, b.h(), tl);
-    c.fill(b.x0, b.y1, b.w(), 1, br);
-    c.fill(b.x1, b.y0, 1, b.h(), br);
-}
-
-fn inset(b: Rect, n: i32) -> Rect {
-    Rect { x0: b.x0 + n, y0: b.y0 + n, x1: b.x1 - n, y1: b.y1 - n }
-}
-
-fn window(c: &mut Canvas, f: &MenuFont, b: Rect, title: &str) {
-    c.fill(b.x0, b.y0, b.w(), b.h(), FACE);
-    bevel(c, b, FACE, DARK);
-    bevel(c, inset(b, 1), LIGHT, SHADOW);
-    c.fill(b.x0 + 3, b.y0 + 3, b.w() - 6, 18, NAVY);
-    f.draw_flat(c, title, WHITE, b.x0 + 7, b.y0 + 6);
-}
-
-fn sunken(c: &mut Canvas, b: Rect, fill: [u8; 3]) {
-    c.fill(b.x0, b.y0, b.w(), b.h(), fill);
-    bevel(c, b, SHADOW, LIGHT);
-    bevel(c, inset(b, 1), DARK, FACE);
-}
-
-fn button(c: &mut Canvas, f: &MenuFont, b: Rect, label: &str) {
-    c.fill(b.x0, b.y0, b.w(), b.h(), FACE);
-    bevel(c, b, LIGHT, DARK);
-    bevel(c, inset(b, 1), FACE, SHADOW);
-    let x = (b.x0 + b.x1 + 1) / 2 - label.len() as i32 * GLYPH_W / 2;
-    f.draw_flat(c, label, BLACK, x, (b.y0 + b.y1 + 1) / 2 - GLYPH_H / 2);
-}
-
-fn edit(c: &mut Canvas, f: &MenuFont, b: Rect, text: &str, focused: bool) {
-    sunken(c, b, WHITE);
-    f.draw_flat(c, text, BLACK, b.x0 + 4, b.y0 + 3);
-    if focused {
-        c.fill(b.x0 + 4 + text.len() as i32 * GLYPH_W, b.y0 + 3, 1, GLYPH_H, BLACK);
-    }
-}
-
-fn checkbox(c: &mut Canvas, f: &MenuFont, b: Rect, label: &str, on: bool) {
-    let bx = r(b.x0, b.y0 + 1, 13, 13);
-    sunken(c, bx, WHITE);
-    if on {
-        // Classic tick: a short down-stroke then a longer up-stroke, 3 px thick.
-        for (i, top) in [5, 6, 7, 6, 5, 4, 3].iter().enumerate() {
-            c.fill(bx.x0 + 3 + i as i32, bx.y0 + top, 1, 3, BLACK);
-        }
-    }
-    f.draw_flat(c, label, BLACK, b.x0 + 18, b.y0 + 2);
-}
-
-fn group(c: &mut Canvas, f: &MenuFont, b: Rect, label: &str) {
-    bevel(c, b, SHADOW, LIGHT);
-    bevel(c, Rect { x0: b.x0 + 1, y0: b.y0 + 1, x1: b.x1 - 1, y1: b.y1 - 1 }, LIGHT, SHADOW);
-    c.fill(b.x0 + 6, b.y0 - 6, label.len() as i32 * GLYPH_W + 4, 13, FACE);
-    f.draw_flat(c, label, BLACK, b.x0 + 8, b.y0 - 6);
-}
-
-struct ProfileLayout {
-    frame: Rect,
-    name: Rect,
-    password: Rect,
-    save: Rect,
-    ok: Rect,
-    cancel: Rect,
-}
-
-struct ZonesLayout {
-    frame: Rect,
-    list: Rect,
-    desc: Rect,
-    remove: Rect,
-    dl_group: Rect,
-    download: Rect,
-    ok: Rect,
-    cancel: Rect,
-}
-
-impl ZonesLayout {
-    fn rows(&self) -> usize {
-        ((self.list.h() - 4) / 14) as usize
-    }
-    fn row_at(&self, x: i32, y: i32) -> Option<usize> {
-        let row = (y - self.list.y0 - 1) / 14;
-        (self.list.contains(x, y) && row >= 0 && (row as usize) < self.rows()).then_some(row as usize)
-    }
-}
-
-struct DialogLayout {
-    profile: ProfileLayout,
-    zones: ZonesLayout,
-}
-
-impl DialogLayout {
-    fn new((w, h): (i32, i32)) -> Self {
-        let pf = r((w - 300) / 2, (h - 150) / 2, 300, 150);
-        let profile = ProfileLayout {
-            frame: pf,
-            name: r(pf.x0 + 100, pf.y0 + 34, 186, 20),
-            password: r(pf.x0 + 100, pf.y0 + 62, 186, 20),
-            save: r(pf.x0 + 100, pf.y0 + 90, 150, 16),
-            ok: r(pf.x0 + 120, pf.y0 + 116, 80, 24),
-            cancel: r(pf.x0 + 208, pf.y0 + 116, 80, 24),
-        };
-        let zf = r((w - 600) / 2, (h - 480) / 2, 600, 480);
-        let zones = ZonesLayout {
-            frame: zf,
-            list: r(zf.x0 + 12, zf.y0 + 44, 300, 272),
-            desc: r(zf.x0 + 324, zf.y0 + 38, 264, 278),
-            remove: r(zf.x0 + 12, zf.y0 + 340, 120, 24),
-            dl_group: r(zf.x0 + 12, zf.y0 + 380, 576, 56),
-            download: r(zf.x0 + 22, zf.y0 + 390, 96, 24),
-            ok: r(zf.x0 + 404, zf.y0 + 446, 88, 24),
-            cancel: r(zf.x0 + 500, zf.y0 + 446, 88, 24),
-        };
-        Self { profile, zones }
-    }
 }
 
 #[cfg(test)]

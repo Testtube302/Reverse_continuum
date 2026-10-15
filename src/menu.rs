@@ -39,7 +39,8 @@ impl MenuScreen {
             z.shown = true;
             zones.push(z);
         }
-        let launcher = Launcher::new(skin, spectate, ships, font, profile, zones);
+        let templates = aicontinuum::dialog::templates(&assets.read("menu040.dll")?);
+        let launcher = Launcher::new(skin, spectate, ships, font, templates, profile, zones);
         let (w, h) = launcher.size();
         let canvas = Canvas::new(w, h);
         let texture = Texture2D::from_rgba8(w as u16, h as u16, &canvas.px);
@@ -95,9 +96,6 @@ impl MenuScreen {
     pub async fn run(&mut self, args: &Args) -> Option<Action> {
         let (w, h) = self.launcher.size();
         request_new_screen_size(w as f32, h as f32);
-        if let Some(which) = &args.open {
-            self.launcher.open(which);
-        }
         let mut frame = 0u32;
         loop {
             let mut input = self.input();
@@ -105,6 +103,10 @@ impl MenuScreen {
                 input.mouse = m;
             }
             input.right_down |= args.right_held;
+            // Test aid: open a dialog once the first pings have had time to come back.
+            if let (Some(which), 20) = (&args.open, frame) {
+                self.launcher.open(which);
+            }
             let mut action = self.launcher.update(&input);
             if args.autoplay && frame == 30 {
                 action = self.launcher.press_play();
