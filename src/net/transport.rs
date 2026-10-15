@@ -58,6 +58,7 @@ struct ContinuumSession {
     keys: Option<(u32, u32)>,
     cipher: Option<ContinuumCipher>,
     expand: Box<dyn FnMut(u32) -> Option<[u32; 20]> + Send>,
+    diagnostic_packets: u32,
 }
 
 pub struct Transport {
@@ -100,6 +101,7 @@ impl Transport {
             keys: None,
             cipher: None,
             expand: Box::new(expand),
+            diagnostic_packets: 0,
         }))
     }
 
@@ -195,12 +197,14 @@ impl Transport {
         }
         let key1 = u32_at(packet, 2).unwrap();
         let key2 = u32_at(packet, 6).unwrap();
+        eprintln!("[Continuum] received encryption challenge; expanding session key");
         let Some(table) = (cont.expand)(key2) else {
             self.fail("Continuum key expansion is unavailable; no session table was supplied");
             return;
         };
         cont.cipher = Some(ContinuumCipher::from_expanded_table(table, key1));
         cont.keys = Some((key1, key2));
+        eprintln!("[Continuum] key expansion complete; sending acknowledgement");
         let now = now_tick();
         self.packets_received = self.packets_received.wrapping_add(1);
         self.last_recv_tick = now;
@@ -267,7 +271,15 @@ impl Transport {
                             continue;
                         }
                         let Some(cipher) = &cont.cipher else { continue };
-                        let Ok(pkt) = cipher.decrypt(&buf[..n]) else { continue };
+                        let decoded = cipher.decrypt_compatible(&buf[..n]);
+                        if matches!(self.state, State::Handshake { .. }) && cont.diagnostic_packets < 10 {
+                            match &decoded {
+                                Ok(pkt) => eprintln!("[Continuum] handshake reply: wire length {n}, decoded length {}, core type {:?}", pkt.len(), pkt.get(..2)),
+                                Err(error) => eprintln!("[Continuum] discarded handshake reply: wire length {n}, {error:?}"),
+                            }
+                            self.continuum.as_mut().unwrap().diagnostic_packets += 1;
+                        }
+                        let Ok(pkt) = decoded else { continue };
                         pkt
                     } else {
                         let mut pkt = buf[..n].to_vec();
@@ -305,6 +317,7 @@ impl Transport {
 
     fn fail(&mut self, why: &str) {
         if self.state != State::Disconnected {
+            eprintln!("[Connection] {why}");
             self.state = State::Disconnected;
             self.events.push_back(Event::Disconnected(why.to_string()));
         }
@@ -393,10 +406,13 @@ impl Transport {
                 }
             }
             0x02 => {
-                if let (State::Handshake { .. }, Some(key)) = (self.state, u32_at(pkt, 2)) {
+                if matches!(self.state, State::Handshake { .. }) {
                     let valid = if let Some(cont) = &self.continuum {
-                        cont.cipher.is_some() && key == 0
+                        // Continuum has already exchanged keys. Unlike VIE, its
+                        // encrypted 00 02 does not require a key field or zero body.
+                        cont.cipher.is_some()
                     } else {
+                        let Some(key) = u32_at(pkt, 2) else { return };
                         self.vie.initialize(key)
                     };
                     if valid {

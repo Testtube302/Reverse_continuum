@@ -101,7 +101,7 @@ fn negotiates_and_transports_encrypted_reliable_packets() {
     assert!(client.poll().is_empty());
     assert_eq!(receive(&server), ACK);
 
-    for early in [&[0x03, 7][..], &[0, 2][..], &[0, 3, 0, 0, 0, 0, 9][..]] {
+    for early in [&[0x03, 7][..], &[0][..], &[0, 3, 0, 0, 0, 0, 9][..]] {
         server
             .send_to(&cipher.encrypt(early).unwrap(), addr)
             .unwrap();
@@ -239,24 +239,21 @@ fn wrong_expansion_cannot_complete_the_handshake() {
 }
 
 #[test]
-fn rejects_invalid_encrypted_acknowledgement() {
-    let (mut client, server, addr) = pair(|_| Some([0; 20]));
-    server.send_to(&RESPONSE, addr).unwrap();
-    assert!(settle(&mut client).is_empty());
-    assert_eq!(receive(&server), ACK);
-    server
-        .send_to(
-            &reference_cipher().encrypt(&[0, 2, 1, 0, 0, 0, 0]).unwrap(),
-            addr,
-        )
-        .unwrap();
-    assert_eq!(
-        settle(&mut client),
-        vec![Event::Disconnected(
-            "server sent an invalid Continuum encryption acknowledgement".into()
-        )]
-    );
-    no_packet(&server);
+fn accepts_continuum_acknowledgements_without_a_vie_key_requirement() {
+    for ack in [vec![0, 2], vec![0, 2, 1, 0, 0, 0, 0]] {
+        let (mut client, server, addr) = pair(|_| Some([0; 20]));
+        server.send_to(&RESPONSE, addr).unwrap();
+        assert!(settle(&mut client).is_empty());
+        assert_eq!(receive(&server), ACK);
+        server
+            .send_to(&reference_cipher().encrypt(&ack).unwrap(), addr)
+            .unwrap();
+        assert_eq!(settle(&mut client), vec![Event::Connected]);
+        assert_eq!(
+            &reference_cipher().decrypt(&receive(&server)).unwrap()[..2],
+            &[0, 5]
+        );
+    }
 }
 
 #[test]
@@ -338,4 +335,30 @@ fn session_uses_continuum_login_layout_only_after_encrypted_ack() {
     assert_eq!(&login[75..77], &40u16.to_le_bytes());
     assert_eq!(&login[101..], &[0x5a; 64]);
     session.disconnect();
+}
+
+#[test]
+fn completes_handshake_with_independent_legacy_crc_short_ack() {
+    let line = include_str!("../docs/research/continuum/legacy-crc-vectors.txt")
+        .lines()
+        .last()
+        .unwrap();
+    let fields: Vec<_> = line.split_whitespace().collect();
+    assert_eq!(fields[1], "0002");
+    let wire: Vec<_> = fields[2]
+        .as_bytes()
+        .chunks_exact(2)
+        .map(|b| u8::from_str_radix(std::str::from_utf8(b).unwrap(), 16).unwrap())
+        .collect();
+    assert!(reference_cipher().decrypt(&wire).is_err());
+    let (mut client, server, addr) = pair(|_| Some([0; 20]));
+    server.send_to(&RESPONSE, addr).unwrap();
+    assert!(settle(&mut client).is_empty());
+    assert_eq!(receive(&server), ACK);
+    server.send_to(&wire, addr).unwrap();
+    assert_eq!(settle(&mut client), vec![Event::Connected]);
+    assert_eq!(
+        &reference_cipher().decrypt(&receive(&server)).unwrap()[..2],
+        &[0, 5]
+    );
 }

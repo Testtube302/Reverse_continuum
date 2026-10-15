@@ -281,6 +281,7 @@ impl Session {
     }
 
     fn fail(&mut self, why: String) {
+        eprintln!("[Session] {why}");
         self.note(format!("failed: {why}"));
         self.phase = Phase::Failed(why);
     }

@@ -414,3 +414,10 @@
 - Added an in-repository Claude/reviewer handoff with checkout instructions,
   available vs external artifacts, reproducible local commands, and concrete
   production blockers. Updated stale research status and root README provenance.
+
+- Acknowledgement compatibility correction after owner-reported Trench Wars timeout:
+  Continuum 00 02 no longer requires a VIE zero-key field; supports short ack and
+  optional body like public nullspace Connection.cpp. Added receive-only legacy CRC
+  compatibility from nullspace Crypt.cpp, with independent C++ fixtures and bounded
+  handshake diagnostics. No Trench Wars packet capture or public test performed;
+  the cause of the reported failure remains unconfirmed pending user retry.

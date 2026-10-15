@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Generate synthetic packet vectors from the pinned MIT nullspace cipher.
 Usage: python3 tools/protocol/generate_continuum_vectors.py /path/to/nullspace
+Pass --legacy-crc to generate the public reference receive-compatibility fixtures.
 Requires clang++ and the revision documented in the research README.
 No network access or game installation required. Output is TSV on stdout.
 """
@@ -17,7 +18,7 @@ crypt = (root / 'src/null/net/security/Crypt.cpp').read_text()
 checksum = (root / 'src/null/net/security/Checksum.cpp').read_text()
 # Extract the public block transform and CRC table/functions, not security solving.
 transform = crypt[crypt.index('void encrypt('):crypt.index('void ContinuumEncrypt::FinalizeExpansion')]
-crc = checksum[checksum.index('static u8 crc8_table'):checksum.index('u8 crc8_repeat')]
+crc = checksum[checksum.index('static u8 crc8_table'):checksum.index('uint32_t crc32_for_byte')]
 header = r'''
 #include <cstdint>
 #include <cstring>
@@ -57,6 +58,16 @@ int main(){
  if(seen!=15)return 2;
 }
 '''
+if '--legacy-crc' in sys.argv[2:]:
+    main = main.replace('src[0]=crc8(p,n)', 'src[0]=crc8_repeat(p[0],n)')
+    # A separately finalized table from the pinned C++ finalization fixture,
+    # used by the loopback handshake tests with an all-zero expanded table.
+    fixture = pathlib.Path(__file__).resolve().parents[2] / 'docs/research/continuum/finalization-vectors.txt'
+    line = [line for line in fixture.read_text().splitlines() if line and not line.startswith('#')][2]
+    final = bytes.fromhex(line.split()[2])
+    words = [int.from_bytes(final[i:i+4], 'little') for i in range(0, 80, 4)]
+    special = 'u32 ack_key[20]={' + ','.join(hex(word) + 'u' for word in words) + '}; u8 ack[2]={0,2}; emit(ack_key,ack,2);'
+    main = main.replace('if(seen!=15)return 2;', 'if(seen!=15)return 2;' + special)
 with tempfile.TemporaryDirectory() as tmp:
     source = pathlib.Path(tmp)/'vectors.cpp'
     source.write_text(header+'\n#include <initializer_list>\n'+transform+crc+main)
