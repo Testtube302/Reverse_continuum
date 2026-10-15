@@ -50,6 +50,10 @@ pub struct ShipSettings {
     pub bomb_bounce_count: u32,
     /// Burst: pieces per burst and their speed.
     pub burst_shrapnel: u32,
+    /// Turrets: how many may attach, and what carrying them costs in thrust and speed.
+    pub turret_limit: u32,
+    pub turret_thrust_penalty: i32,
+    pub turret_speed_penalty: i32,
     /// Energy per 10 s while cloak / stealth / antiwarp / X-radar are on.
     pub cloak_energy: u32,
     pub stealth_energy: u32,
@@ -223,6 +227,9 @@ impl ShipSettings {
             max_mines: u8_at(b, 108),
             bomb_bounce_count: u8_at(b, 123),
             burst_shrapnel: u8_at(b, 107),
+            turret_limit: u8_at(b, 106),
+            turret_thrust_penalty: u16_at(b, 76) as i16 as i32,
+            turret_speed_penalty: u16_at(b, 78) as i16 as i32,
             cloak_energy: u16_at(b, 32),
             stealth_energy: u16_at(b, 34),
             antiwarp_energy: u16_at(b, 36),
@@ -368,6 +375,9 @@ const fn ship(rot: (u32, u32), thrust: (u32, u32), speed: (u32, u32), max_energy
         max_mines: 5,
         bomb_bounce_count: 0,
         burst_shrapnel: 10,
+        turret_limit: 0,
+        turret_thrust_penalty: 0,
+        turret_speed_penalty: 0,
         cloak_energy: 1000,
         stealth_energy: 1000,
         antiwarp_energy: 1000,

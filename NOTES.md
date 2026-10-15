@@ -71,6 +71,18 @@
       right-aligned to 165), W/L view (380 wide: Squad@133, W/L/R right edges 253/293/333, Ave
       "x.y" to 381), team totals (268 wide: Freq, Points/Win/Lose/Flag right edges 125/173/221/269).
       Headers pixel-identical; R (rating) formula unknown — shows 0; Ave = points per kill (guess).
+      Round 17: turrets. F7 attaches to the F2-ticked player (Page Up/Down moves the tick; default
+      us) with the reference client's checks/messages; C2S 0x10 pid (0xFFFF detach), 0x14 drop
+      turrets; S2C 0x0E (requester, dest/0xFFFF; SS.NET broadcasts it to the whole arena incl.
+      the requester), 0x15 carrier dropped turrets. Attaching costs 2/3 of energy; a turret rides
+      at the carrier's position and only turns/fires; carriers lose TurretThrust/SpeedPenalty
+      (ship +76/+78), TurretLimit +106. Turrets drawn as turret2.png on the carrier, labels
+      stacked under the carrier's. Verified: zone confirms our attach; the original lists us with
+      the "T" marker (spectate.gif frame 3; 4 = ticked turret) and shows no label for its own
+      turret; when the original attached to us, our view put its label a line below ours.
+      Turret sprite visibility on the carrier not verified (small dark sprite).
+      Rig lessons: --screenshot runs exit after --frames (faster than 60 fps) — give a big
+      --frames; xdotool focus on our Wine window is unreliable, so use --attach-to NAME / --freq N.
       NOT yet: 
       cloak/xradar/antiwarp effects, EMP shutdown, arena spawn settings, attach/turrets,
       flags/balls, score packets.
@@ -216,7 +228,8 @@
 - Rig helpers: tools/ref-rig/rx.sh (run in container, optional screenshot → ~/aicontinuum-ref/shots;
   C=aic-wine5 to target the original's container) and crop.sh. Start: `docker start aic-ref aic-wine5`,
   clear /tmp/.X99-lock, start Xvfb :99 x16, zone-restart.sh, then join5.sh in aic-wine5.
-- Next: attach/turrets, balls; then the zone VM (ask Ryan first) and integration.
+- Next: balls (powerball); then the zone VM (Ryan to confirm) and integration incl. the
+  Continuum-encryption question (see memory: research public docs first, no RE).
 - Rig arena gives Warbirds 2 of every item (InitialRepel..InitialPortal).
 - The rig's centre safe zone has wall pieces: bots chasing the original get stuck behind them.
   Move the original into open space first (Up 1.2 s, wait, Down 1.2 s).

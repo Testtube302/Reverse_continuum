@@ -61,6 +61,8 @@ pub struct Hud {
     spectate: Texture2D,
     /// F2 stat box view (0 names, 1 points, 2 point sort, 3 team sort, 4 W/L, 5 teams), or none.
     pub statbox: Option<u8>,
+    /// The "ticked" player in the stat box (Page Up/Down), target of F7 attach. None = us.
+    pub selected: Option<u16>,
     gradient: Texture2D,
     icons: Texture2D,
     dropflag: Texture2D,
@@ -99,6 +101,7 @@ impl Hud {
             led: load_texture(assets, "led"),
             spectate: load_texture(assets, "spectate"),
             statbox: None,
+            selected: None,
             gradient: load_texture(assets, "gradient"),
             icons: load_texture(assets, "Icons"),
             dropflag: load_texture(assets, "dropflag"),
@@ -601,6 +604,18 @@ pub fn draw_menu(hud: &Hud) {
 
 /// F2 stat box (player names view), laid out as in the original: a 108 px wide box at the
 /// top left with the player count centred in the header and one 12 px row per player.
+/// Moves the stat box tick up or down the list (us first, then by name).
+pub fn move_selection(hud: &mut Hud, game: &Game, down: bool) {
+    let Some(s) = &game.session else { return };
+    let Some(me) = s.me() else { return };
+    let mut players: Vec<_> = s.players.values().collect();
+    players.sort_by_key(|p| (p.pid != me.pid, p.name.to_lowercase()));
+    let current = hud.selected.unwrap_or(me.pid);
+    let i = players.iter().position(|p| p.pid == current).unwrap_or(0);
+    let j = if down { (i + 1).min(players.len().saturating_sub(1)) } else { i.saturating_sub(1) };
+    hud.selected = players.get(j).map(|p| p.pid);
+}
+
 pub fn draw_statbox(hud: &Hud, game: &Game, view: u8) {
     let Some(s) = &game.session else { return };
     let Some(me) = s.me() else { return };
@@ -614,10 +629,14 @@ pub fn draw_statbox(hud: &Hud, game: &Game, view: u8) {
         marker: Option<u32>,
         runs: Vec<(f32, TextColor, bool, String)>,
     }
-    let marker = |p: &aicontinuum::net::session::Player| match (p.pid == me.pid, p.ship >= 8) {
-        (true, false) => Some(0),
-        (false, true) => Some(1),
-        (true, true) => Some(2),
+    let ticked = hud.selected.filter(|pid| s.players.contains_key(pid)).unwrap_or(me.pid);
+    // spectate.gif: 0 ticked, 1 spectator, 2 ticked spectator, 3 turret, 4 ticked turret.
+    let marker = |p: &aicontinuum::net::session::Player| match (p.pid == ticked, p.ship >= 8, p.attached_to.is_some()) {
+        (true, false, false) => Some(0),
+        (false, true, _) => Some(1),
+        (true, true, _) => Some(2),
+        (false, false, true) => Some(3),
+        (true, false, true) => Some(4),
         _ => None,
     };
     let name = |p: &aicontinuum::net::session::Player| p.name.chars().take(12).collect::<String>();
@@ -707,7 +726,7 @@ pub fn draw_statbox(hud: &Hud, game: &Game, view: u8) {
                     let sum = |g: &dyn Fn(&aicontinuum::net::session::Player) -> u32| team.iter().map(|p| g(p)).sum::<u32>();
                     let c = color(f);
                     Row {
-                        marker: (f == me.freq).then_some(0),
+                        marker: s.players.get(&ticked).is_some_and(|t| t.freq == f).then_some(0),
                         runs: vec![
                             (13.0, c, false, f.to_string()),
                             (125.0, c, true, sum(&|p| points(p)).to_string()),

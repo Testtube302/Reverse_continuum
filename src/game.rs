@@ -324,14 +324,80 @@ impl Game {
         Some((secs / 3600, secs / 60 % 60, secs % 60))
     }
 
-    /// F7: attach to a teammate as a turret. Turrets aren't implemented yet; with too little
-    /// bounty the original refuses with this yellow centre message (measured).
-    pub fn request_attach(&mut self) {
-        let Some((_, settings)) = self.world() else { return };
+    /// F7: attach to `target` as a turret, or detach if we're riding one, or shake off our own
+    /// turrets. Checks and messages follow the reference client.
+    pub fn request_attach(&mut self, target: Option<u16>) {
+        let Some((_, settings)) = self.world_handles() else { return };
         let Some(ship) = self.ship.as_ref().filter(|_| self.alive()) else { return };
-        if ship.bounty < settings.ships[ship.ship as usize].attach_bounty {
-            let text = "Bounty not high enough to attach.".to_string();
+        let (energy, max_energy, bounty, kind) = (ship.energy, ship.max_energy, ship.bounty, ship.ship);
+        let pos = ship.position;
+        let antiwarper = self.antiwarped_by(pos, &settings);
+        let Some(s) = self.session.as_mut() else { return };
+        let Some(me) = s.me().cloned() else { return };
+        if me.attached_to.is_some() {
+            s.send_attach_request(0xFFFF);
+            if let Some(m) = s.pid.and_then(|pid| s.players.get_mut(&pid)) {
+                m.attached_to = None;
+            }
+            return;
+        }
+        if s.players.values().any(|p| p.attached_to == Some(me.pid)) {
+            s.send_attach_drop();
+            return;
+        }
+        let dest = target.and_then(|t| s.players.get(&t)).cloned();
+        let refusal = if energy < max_energy as f32 {
+            Some("Not enough energy to attach.")
+        } else if bounty < settings.ships[kind as usize].attach_bounty {
+            Some("Bounty not high enough to attach.")
+        } else {
+            match &dest {
+                None => None,
+                Some(d) if d.pid == me.pid => Some("Cannot attach to self."),
+                Some(d) if d.freq != me.freq => Some("Must attach to somebody of same frequency."),
+                Some(d) if d.ship >= 8 => Some("Cannot attach to spectator."),
+                Some(d) if settings.ships[d.ship as usize].turret_limit == 0 => Some("Target ship is not attachable."),
+                Some(d) => {
+                    let riding = s.players.values().filter(|p| p.attached_to == Some(d.pid)).count() as u32;
+                    (riding >= settings.ships[d.ship as usize].turret_limit).then_some("Too many turrets already attached.")
+                }
+            }
+        };
+        if let Some(text) = refusal {
+            self.center_messages.push(CenterMessage { text: text.into(), yellow: true, age: 0 });
+            return;
+        }
+        let Some(d) = dest else { return };
+        if let Some(name) = antiwarper {
+            let text = format!("AntiWarp engaged by: {name}");
             self.center_messages.push(CenterMessage { text, yellow: true, age: 0 });
+            return;
+        }
+        s.send_attach_request(d.pid);
+        if let Some(m) = s.pid.and_then(|pid| s.players.get_mut(&pid)) {
+            m.attached_to = Some(d.pid);
+        }
+        // Attaching costs two thirds of our energy (reference client).
+        if let Some(ship) = self.ship.as_mut() {
+            ship.energy *= 0.333;
+        }
+    }
+
+    /// While attached, sit on the carrier and move with it; a carrier counts its turrets.
+    fn follow_carrier(&mut self) -> bool {
+        let Some(s) = self.session.as_ref() else { return false };
+        let Some(me) = s.me() else { return false };
+        let turrets = s.players.values().filter(|p| p.attached_to == Some(me.pid)).count() as u32;
+        let carrier = me.attached_to.and_then(|c| s.players.get(&c)).filter(|c| !c.dead && c.ship < 8).cloned();
+        let Some(ship) = self.ship.as_mut() else { return false };
+        ship.turrets = turrets;
+        match carrier {
+            Some(c) => {
+                ship.position = c.position;
+                ship.velocity = c.velocity;
+                true
+            }
+            None => false,
         }
     }
 
@@ -486,7 +552,11 @@ impl Game {
                     self.ship = Some(ship);
                 }
             }
-        } else if let Some(ship) = self.ship.as_mut() {
+        } else if self.ship.is_some() {
+            // A turret only turns and fires; it rides at its carrier's position.
+            let riding = self.follow_carrier();
+            let input = if riding { Input { forward: false, backward: false, afterburner: false, ..input } } else { input };
+            let ship = self.ship.as_mut().unwrap();
             if ship.tick(&map, &settings, input) {
                 self.sounds.push(SoundCue { name: "bounce".into(), position: ship.position });
             }

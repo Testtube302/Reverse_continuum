@@ -47,6 +47,10 @@ struct Args {
     help: Option<usize>,
     /// Spectate following this player's ship.
     follow: Option<String>,
+    /// Ask for this team after getting the first ship (online).
+    freq: Option<u16>,
+    /// Test aid: attach to this player as a turret ~5 s after getting a ship (like F7).
+    attach_to: Option<String>,
 }
 
 fn parse_args() -> Args {
@@ -68,6 +72,8 @@ fn parse_args() -> Args {
         statbox: None,
         help: None,
         follow: None,
+        freq: None,
+        attach_to: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -100,6 +106,8 @@ fn parse_args() -> Args {
             "--statbox" => args.statbox = Some(value().parse().unwrap_or(0)),
             "--help-page" => args.help = value().parse().ok(),
             "--follow" => args.follow = Some(value()),
+            "--freq" => args.freq = value().parse().ok(),
+            "--attach-to" => args.attach_to = Some(value()),
             "--at" => {
                 let v = value();
                 let (x, y) = v.split_once(',').unwrap_or_else(|| panic!("--at x,y"));
@@ -182,6 +190,7 @@ struct Graphics {
     warp: Sheet,
     repel: Sheet,
     spark: Sheet,
+    turret: Sheet,
     exhaust: Sheet,
     rocket: Sheet,
     portal: Sheet,
@@ -214,6 +223,7 @@ impl Graphics {
             warp: Sheet::load(assets, "warp", 48, 48),
             repel: Sheet::load(assets, "repel", 96, 96),
             spark: Sheet::load(assets, "spark", 40, 40),
+            turret: Sheet::load(assets, "turret2", 16, 16),
             exhaust: Sheet::load(assets, "exhaust", 16, 16),
             rocket: Sheet::load(assets, "rocket", 24, 24),
             portal: Sheet::load(assets, "warppnt", 16, 16),
@@ -377,7 +387,7 @@ fn read_input() -> Input {
 
 #[macroquad::main(window_conf)]
 async fn main() {
-    let args = parse_args();
+    let mut args = parse_args();
     let assets = AssetDir::locate(args.assets.as_deref()).unwrap_or_else(|e| die(e));
     let gfx = Graphics::load(&assets);
     let mut hud = hud::Hud::load(&assets);
@@ -489,6 +499,19 @@ async fn main() {
                 game.request_ship(n);
             }
         }
+        if let (Some(f), Some(_)) = (args.freq, game.ship.as_ref()) {
+            if let Some(s) = game.session.as_mut() {
+                s.request_freq(f);
+            }
+            args.freq = None;
+        }
+        if let (Some(name), true) = (args.attach_to.clone(), game.alive() && frame > 300) {
+            let pid = game.session.as_ref().and_then(|s| s.players.values().find(|p| p.name == name).map(|p| p.pid));
+            if pid.is_some() {
+                game.request_attach(pid);
+                args.attach_to = None;
+            }
+        }
         // Online --at: place our first ship there (a test aid for reproducible comparisons).
         if let (Some(at), Some(ship), false) = (args.at, game.ship.as_mut(), placed_at) {
             ship.position = at;
@@ -512,8 +535,14 @@ async fn main() {
                 game.toggle_status(if shift { STATUS_ANTIWARP } else { STATUS_XRADAR });
             }
         }
+        if !typing && !menu_open && is_key_pressed(KeyCode::PageDown) {
+            hud::move_selection(&mut hud, &game, true);
+        }
+        if !typing && !menu_open && is_key_pressed(KeyCode::PageUp) {
+            hud::move_selection(&mut hud, &game, false);
+        }
         if !typing && !menu_open && is_key_pressed(KeyCode::F7) {
-            game.request_attach();
+            game.request_attach(hud.selected);
         }
         if !typing && !menu_open && is_key_pressed(KeyCode::F1) {
             // F1 pages through help, closing after the last page.
@@ -614,9 +643,12 @@ async fn main() {
                     if let Some(s) = &game.session {
                         for p in s.players.values() {
                             eprintln!(
-                                "player {} pid={} ship={} freq={} pos=({:.1},{:.1}) updates={} dead={}",
-                                p.name, p.pid, p.ship, p.freq, p.position.x, p.position.y, p.position_updates, p.dead
+                                "player {} pid={} ship={} freq={} pos=({:.1},{:.1}) updates={} dead={} attached_to={:?}",
+                                p.name, p.pid, p.ship, p.freq, p.position.x, p.position.y, p.position_updates, p.dead, p.attached_to
                             );
+                        }
+                        for line in s.log.iter().filter(|l| l.contains("turret")) {
+                            eprintln!("{line}");
                         }
                         eprintln!("camera=({:.1},{:.1}) spectate_at=({:.1},{:.1})", game.camera.x, game.camera.y, s.spectate_at.x, s.spectate_at.y);
                     }
@@ -674,6 +706,20 @@ fn view_freq(game: &Game) -> Option<u16> {
     match (game.ship.is_none(), followed) {
         (true, Some(f)) => Some(f.freq),
         _ => s.me().map(|m| m.freq),
+    }
+}
+
+/// Turrets riding on `carrier`: turret2.png in each turret's own direction on the carrier, and
+/// their name labels stacked 12 px apart under the carrier's (reference client).
+fn draw_turrets(gfx: &Graphics, hud: &mut hud::Hud, game: &Game, carrier: u16, at: (f32, f32), view_freq: Option<u16>, first_line: u32) {
+    let Some(s) = &game.session else { return };
+    let mut riders: Vec<_> = s.players.values().filter(|p| p.attached_to == Some(carrier) && Some(p.pid) != s.pid).collect();
+    riders.sort_by_key(|p| p.pid);
+    for (k, p) in riders.iter().enumerate() {
+        gfx.turret.draw_centered(p.direction.min(39) as u32, at.0, at.1);
+        let line = first_line + k as u32;
+        let label_at = (at.0, at.1 + 12.0 * line as f32);
+        hud.name_label(&p.name, p.bounty, p.flags_carried, p.ping as u32 * 10, view_freq == Some(p.freq), None, label_at);
     }
 }
 
@@ -788,7 +834,7 @@ fn draw_world(game: &Game, tiles: &Tiles, gfx: &Graphics, hud: &mut hud::Hud) {
         let view_freq = view_freq(game);
         let now = aicontinuum::net::transport::now_tick();
         for p in s.players.values() {
-            if Some(p.pid) == s.pid || p.ship >= 8 || p.dead || p.position_updates == 0 {
+            if Some(p.pid) == s.pid || p.ship >= 8 || p.dead || p.position_updates == 0 || p.attached_to.is_some() {
                 continue;
             }
             // Cloaked enemies stay hidden unless we have X-radar on.
@@ -803,13 +849,26 @@ fn draw_world(game: &Game, tiles: &Tiles, gfx: &Graphics, hud: &mut hud::Hud) {
                 .filter(|t| now.wrapping_sub(*t) < 300)
                 .map(|_| (p.energy, _settings.ships[p.ship as usize].initial_energy));
             hud.name_label(&p.name, p.bounty, p.flags_carried, p.ping as u32 * 10, view_freq == Some(p.freq), energy, (x, y));
+            draw_turrets(gfx, hud, game, p.pid, (x, y), view_freq, 1);
         }
     }
 
     if let (Some(ship), true) = (&game.ship, game.alive()) {
         let (x, y) = to_screen(ship.position);
-        gfx.ships.draw_centered(ship.ship as u32 * 40 + ship.direction() as u32, x, y);
-        hud.own_energy_label(ship.energy as u32, ship.max_energy, (x, y));
+        let riding = game.session.as_ref().and_then(|s| s.me()).is_some_and(|m| m.attached_to.is_some());
+        if riding {
+            // As a turret we're drawn as turret2.png on top of the carrier.
+            gfx.turret.draw_centered(ship.direction() as u32, x, y);
+        } else {
+            gfx.ships.draw_centered(ship.ship as u32 * 40 + ship.direction() as u32, x, y);
+        }
+        if let Some(pid) = game.session.as_ref().and_then(|s| s.pid) {
+            let low = ship.energy * 2.0 < ship.max_energy as f32;
+            draw_turrets(gfx, hud, game, pid, (x, y), view_freq(game), if low { 2 } else { 1 });
+        }
+        // Riding as a turret, our energy goes one line below the carrier's label.
+        let line = if riding { 12.0 } else { 0.0 };
+        hud.own_energy_label(ship.energy as u32, ship.max_energy, (x, y + line));
     }
 
     for (tx, ty) in visible_tiles() {

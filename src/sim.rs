@@ -137,6 +137,8 @@ pub struct Ship {
     pub rocket_ticks: u32,
     /// Ticks left of an EMP recharge shutdown.
     pub emp_ticks: u32,
+    /// Turrets riding on us (set by the game from the player list): costs thrust and speed.
+    pub turrets: u32,
     /// Stealth/cloak/X-radar/antiwarp bits that are on, plus a pending flash (uncloaking).
     pub status: u8,
     /// An active portal: where it is and ticks left.
@@ -208,6 +210,7 @@ impl Ship {
             next_repel_tick: 0,
             rocket_ticks: 0,
             emp_ticks: 0,
+            turrets: 0,
             status: 0,
             portal: None,
             portal_held: false,
@@ -424,10 +427,10 @@ impl Ship {
             settings.rocket_thrust
         } else if shutdown {
             0
-        } else if afterburner {
-            s.maximum_thrust
         } else {
-            self.thrust
+            let base = if afterburner { s.maximum_thrust } else { self.thrust } as i32;
+            let penalty = if self.turrets > 0 { s.turret_thrust_penalty } else { 0 };
+            (base - penalty).max(0) as u32
         } as f32
             * (10.0 / 16.0)
             * dt;
@@ -451,6 +454,9 @@ impl Ship {
         }
 
         let mut speed = if rocket { settings.rocket_speed } else if afterburner { s.maximum_speed } else { self.speed };
+        if self.turrets > 0 && !rocket {
+            speed = (speed as i32 - s.turret_speed_penalty).max(0) as u32;
+        }
         if self.repel_ticks > 0 {
             self.repel_ticks -= 1;
             speed = speed.max(settings.repel_speed);

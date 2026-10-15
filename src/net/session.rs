@@ -97,6 +97,8 @@ pub struct Player {
     pub flag_points: u32,
     pub wins: u16,
     pub losses: u16,
+    /// The player this one is attached to as a turret.
+    pub attached_to: Option<u16>,
     pub bounty: u16,
     pub energy: u16,
     /// Latency in 10 ms units, as relayed in position packets.
@@ -275,6 +277,27 @@ impl Session {
         }
         self.update_doors();
         self.expire_bricks();
+    }
+
+    /// Detaches `pid` from its carrier and any turrets from it.
+    fn detach_all(&mut self, pid: u16) {
+        for pl in self.players.values_mut() {
+            if pl.pid == pid || pl.attached_to == Some(pid) {
+                pl.attached_to = None;
+            }
+        }
+    }
+
+    /// Asks to attach to `pid` as a turret (0xFFFF detaches).
+    pub fn send_attach_request(&mut self, pid: u16) {
+        let mut p = vec![0x10];
+        p.extend_from_slice(&pid.to_le_bytes());
+        self.transport.send_reliable(&p);
+    }
+
+    /// As a carrier, shakes off all turrets.
+    pub fn send_attach_drop(&mut self) {
+        self.transport.send_reliable(&[0x14]);
     }
 
     /// Asks the zone to drop a brick at our tile.
@@ -575,6 +598,7 @@ impl Session {
                         position_updates: 0,
                         dead: false,
                         flags_carried: u16_at(rec, 61).unwrap_or(0),
+                        attached_to: u16_at(rec, 59).filter(|&a| a != 0xFFFF),
                     };
                     self.note(format!("player entered: {} (pid {}, ship {})", pl.name, pl.pid, pl.ship));
                     if self.joined {
@@ -586,12 +610,51 @@ impl Session {
             0x04 => {
                 if let Some(pid) = u16_at(p, 1) {
                     if let Some(pl) = self.players.remove(&pid) {
+                        self.detach_all(pid);
                         self.note(format!("player left: {}", pl.name));
                         self.arena_messages.push(format!("{} left arena", pl.name));
                     }
                 }
             }
             0x21 => self.on_brick(p),
+            // Turret link: requester attached to destination (0xFFFF = detached); a short packet
+            // detaches us.
+            0x0E => {
+                let Some(requester) = u16_at(p, 1) else { return };
+                self.note(format!("turret link: {requester} -> {:?}", u16_at(p, 3)));
+                match u16_at(p, 3) {
+                    None => {
+                        if let Some(me) = self.pid.and_then(|pid| self.players.get_mut(&pid)) {
+                            me.attached_to = None;
+                        }
+                    }
+                    Some(0xFFFF) => {
+                        if let Some(pl) = self.players.get_mut(&requester) {
+                            pl.attached_to = None;
+                        }
+                    }
+                    Some(dest) => {
+                        let at = self.players.get(&dest).map(|d| d.position);
+                        if let Some(pl) = self.players.get_mut(&requester) {
+                            pl.attached_to = Some(dest);
+                            if let Some(at) = at {
+                                pl.position = at;
+                            }
+                        }
+                    }
+                }
+            }
+            // A carrier dropped all its turrets.
+            0x15 => {
+                if let Some(pid) = u16_at(p, 1) {
+                    if self.me().is_some_and(|m| m.attached_to == Some(pid)) {
+                        self.send_attach_request(0xFFFF);
+                    }
+                    for pl in self.players.values_mut().filter(|pl| pl.attached_to == Some(pid)) {
+                        pl.attached_to = None;
+                    }
+                }
+            }
             // Score update: pid, kill points, flag points, kills, deaths.
             0x09 => {
                 if let (Some(pid), Some(kp), Some(fp), Some(w), Some(l)) =
@@ -606,6 +669,7 @@ impl Session {
             0x28 => self.on_small_position(p),
             0x06 => {
                 if let (Some(killer), Some(killed), Some(bounty)) = (u16_at(p, 2), u16_at(p, 4), u16_at(p, 6)) {
+                    self.detach_all(killed);
                     if let Some(pl) = self.players.get_mut(&killed) {
                         pl.dead = true;
                         pl.losses = pl.losses.wrapping_add(1);
