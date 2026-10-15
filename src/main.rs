@@ -679,8 +679,7 @@ fn draw_world(game: &Game, tiles: &Tiles, gfx: &Graphics, hud: &mut hud::Hud) {
     // Exhaust sits under the ships (its first frames are hidden by the ship in the original).
     for e in &game.exhaust {
         let (x, y) = to_screen(e.position);
-        let row = if e.afterburner { 19 } else { 0 };
-        gfx.exhaust.draw_centered(row + e.frame(), x, y);
+        gfx.exhaust.draw_centered(e.frame(), x, y);
     }
 
     for p in &game.bomb_puffs {

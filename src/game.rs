@@ -128,13 +128,13 @@ impl TrailDot {
     }
 }
 
-/// One puff of engine exhaust (row 0 of exhaust.png, row 1 with the afterburner on).
+/// One puff of engine exhaust (row 0 of exhaust.png — also with the afterburner on, verified
+/// against the original while its energy drained; what row 1 is for is unknown).
 #[derive(Clone, Copy, Debug)]
 pub struct Exhaust {
     pub position: Vec2,
     /// Tiles per tick.
     pub velocity: Vec2,
-    pub afterburner: bool,
     pub age: u32,
 }
 
@@ -484,7 +484,7 @@ impl Game {
                         let position = Vec2::new(ship.position.x + x / 16.0, ship.position.y + y / 16.0);
                         let speed = EXHAUST_SPEED_PX / 16.0 / 100.0;
                         let velocity = Vec2::new(-fx * speed, -fy * speed);
-                        self.exhaust.push(Exhaust { position, velocity, afterburner: input.afterburner, age: 0 });
+                        self.exhaust.push(Exhaust { position, velocity, age: 0 });
                     }
                 }
                 self.thrust_ticks += 1;

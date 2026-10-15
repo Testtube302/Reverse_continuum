@@ -212,7 +212,8 @@ impl Hud {
         let anim = ((get_time() * 10.0) as u32 % 14) as f32;
         // Dim full-length track = MaximumEnergy; bright inner segment = this ship's current capacity.
         let track = Rect::new(5.0, 0.0, 1.0, 1.0);
-        blit_scaled(&self.gradient, track, cx - HALF, 9.0, HALF * 2.0, 2.0);
+        // The dim track starts one pixel further left than the fill: x = cx-183 ..= cx+181 (measured).
+        blit_scaled(&self.gradient, track, cx - HALF - 1.0, 9.0, HALF * 2.0 + 1.0, 2.0);
         let capacity = (HALF * (ship.max_energy as f32 / max_energy as f32).min(1.0)).round();
         blit_scaled(&self.gradient, Rect::new(0.0, 0.0, 1.0, 1.0), cx - capacity, 9.0, capacity * 2.0, 2.0);
         let fill = Rect::new(anim, row, 1.0, 1.0);
@@ -369,7 +370,8 @@ impl Hud {
         let sector_y = ((center.y / 51.2) as u32).min(19);
         let sector = format!("{}{}", (b'A' + sector_x as u8) as char, sector_y + 1);
         let label = format!("{}  {sector}", clock_text());
-        self.text(&label, TextColor::White, pos.x + dim - label.len() as f32 * FONT_W, pos.y - 20.0);
+        // 16 px above the radar's inner top edge (re-measured in round 12: y=578 at 1024x768).
+        self.text(&label, TextColor::White, pos.x + dim - label.len() as f32 * FONT_W, pos.y - 16.0);
 
         let world_min = vec2(min_x as f32, min_y as f32) * 1024.0 / full_dim as f32;
         let world_dim = view as f32 * 1024.0 / full_dim as f32;
@@ -392,7 +394,9 @@ impl Hud {
                 dot(self, p.position, row, 2.0);
             }
         }
-        if let (Some(ship), true) = (&game.ship, game.alive()) {
+        // Our own dot blinks: 16 ticks on, 16 off (measured ~160 ms each).
+        let blink_on = (get_time() * 100.0) as u64 % 32 < 16;
+        if let (Some(ship), true, true) = (&game.ship, game.alive(), blink_on) {
             dot(self, ship.position, ColorRow::RadarSelf, 2.0);
         }
 

@@ -6,6 +6,7 @@
 //!          dist:N = chase distance in tiles (default 10),
 //!          every:MS = at most one shot per MS milliseconds, bomb = fire bombs instead of guns,
 //!          flags = collect dropped flags first (then chase),
+//!          watch = report the chase target but don't move,
 //!          freq:N = switch to team N after getting a ship
 
 use std::time::{Duration, Instant};
@@ -78,12 +79,14 @@ fn main() {
                 println!("flag input {:?} ship (orient, vx, vy) {o:?}", flag_input(&game));
             }
         }
+        let watch = modes.contains(&"watch");
         let flag_input = if want_flags { flag_input(&game) } else { None };
         let input = match (&chase, flag_input.or_else(|| chase_input(&game, chase.as_deref(), dist))) {
             (Some(_), Some(i)) => i,
             (Some(_), None) => Input::default(),
             _ => input,
         };
+        let input = if watch { Input::default() } else { input };
         while Instant::now() >= next_tick {
             let mut input = input;
             if bomb {
@@ -127,16 +130,23 @@ fn report_chase(game: &Game, target: &str) {
     let me = game.ship.as_ref().map(|m| (m.position.x as i32, m.position.y as i32));
     match s.players.values().find(|p| p.name == target) {
         Some(t) => println!(
-            "chase: me {me:?} target ship {} dead {} updates {} at ({}, {})",
-            t.ship, t.dead, t.position_updates, t.position.x as i32, t.position.y as i32
+            "chase: me {me:?} target ship {} dead {} updates {} at ({}, {}) px ({}, {}) dir {}",
+            t.ship,
+            t.dead,
+            t.position_updates,
+            t.position.x as i32,
+            t.position.y as i32,
+            (t.position.x * 16.0).round(),
+            (t.position.y * 16.0).round(),
+            t.direction
         ),
         None => println!("chase: me {me:?}, no player named {target}"),
     }
-    let dropped: Vec<_> = s.flags.values().filter(|f| f.dropped).map(|f| (f.id, f.x, f.y)).collect();
+    let dropped: Vec<_> = s.flags.values().filter(|f| f.dropped).map(|f| (f.id, f.x, f.y, f.owner)).collect();
     println!(
         "flags: known {} dropped {:?} carrying {}",
         s.flags.len(),
-        &dropped[..dropped.len().min(4)],
+        dropped,
         s.me().map_or(0, |m| m.flags_carried)
     );
 }

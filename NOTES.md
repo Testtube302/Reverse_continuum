@@ -27,12 +27,12 @@
       NOT yet: usable items (repel/burst/decoy/thor/brick/rocket/portal/warp key), stealth/
       cloak/xradar/antiwarp effects, EMP shutdown, arena spawn settings, attach/turrets,
       flags/balls, score packets.
-- [~] M4 UI (in progress): hud.rs + main.rs draw the HUD, radar, chat, Esc menu, map objects,
+- [x] M4 UI (look-matching done 2026-10-15, leftovers listed in round 12): hud.rs + main.rs draw the HUD, radar, chat, Esc menu, map objects,
       stars. VERIFIED PIXEL-EXACT vs the original (tools/ref-rig): Esc menu, radar frame+sector grid,
       chat line, spectator X-radar icon. Positions verified: disp.png panel (sw-84,5), energy digits
       right edge sw-14 y0, LED rows y=31/44/57 right edge sw-12, icon columns top=sh/2-48 step 25,
       energy bar track ±182 @y9 h2, fill = 182*energy/MaximumEnergy @y14 h5, radar label
-      "h:mmam  J10" right-aligned to radar edge at radar.y-20. Outside the map only a 1-tile ring of
+      "h:mmam  J10" right-aligned to radar edge at radar.y-16 (corrected in round 12). Outside the map only a 1-tile ring of
       tile 20 is drawn. Spectators start at map (0,0).
       Round 2 (2026-10-15): in-ship HUD diffed with matched loadouts (rig arena: PrizeFactor=0,
       PrizeDelay=30000, [Warbird] InitialBounty=0): energy digits 0 px, panel 1, icon columns 2-3,
@@ -119,7 +119,18 @@
       to it at y=113; from FlagDropDelay @1204, restarting on each pickup (ours matches; icon
       animation speed and dropping at 0 not done).
       tools/ref-rig/find_sprites.py: exact sprite matches anywhere in a capture (fast).
-      TODO: name-tag toggles (need players in view), LED rows 1-2 meaning (currently 0),
+      Round 12: whole-screen in-ship diff. Our ship placed with --at on the original's exact
+      position (examples/bot watch,chase:Name prints it in px): 6821 of 786k px differ, all
+      explained — chat history, the two ships/labels at centre, energy-fill animation phase,
+      starfield, flag-orb animation phase, door animation, radar dots. Fixed: energy track
+      starts at cx-183 (1 px further left), clock label 16 px above the radar (was 20), own
+      radar dot blinks 16 ticks on / 16 off, exhaust stays on row 0 with the afterburner (the
+      original's energy drained 1000->963 with Shift held, row 0 throughout). F3-F6, F8-F10,
+      F12 change nothing visible even with a player on screen.
+      M4 leftovers (not blocking): starfield generator + sprite stars star01-07 (positions are
+      the original's own), door animation, flag-orb/fill animation sync, dropflag icon speed,
+      a blinking red/orange radar dot of unknown origin (not a flag, not a map tile).
+      TODO (old list): LED rows 1-2 meaning (currently 0),
       bg sparkle objects (bg01-14), door animation, flags, LVZ, in-ship full-screen diff with
       matched state (original's ship had multiprize upgrades), Windows clock offset (uses `date`).
 
@@ -158,8 +169,8 @@
 - Rig helpers: tools/ref-rig/rx.sh (run in container, optional screenshot → ~/aicontinuum-ref/shots;
   C=aic-wine5 to target the original's container) and crop.sh. Start: `docker start aic-ref aic-wine5`,
   clear /tmp/.X99-lock, start Xvfb :99 x16, zone-restart.sh, then join5.sh in aic-wine5.
-- Next round planned: whole-screen in-ship diff with matched state, afterburner exhaust row,
-  F-key toggles with a player in view, then M4 done -> gameplay items.
+- Next: gameplay items (M3 leftovers): usable items (repel, burst, decoy, thor, brick, rocket,
+  portal, warp), stealth/cloak/xradar/antiwarp, EMP shutdown, attach/turrets, balls, scores.
 - The rig's centre safe zone has wall pieces: bots chasing the original get stuck behind them.
   Move the original into open space first (Up 1.2 s, wait, Down 1.2 s).
 - After a help capture the original is left with an F1 page open: press F1 until it closes.
