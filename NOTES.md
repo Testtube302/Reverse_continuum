@@ -421,3 +421,11 @@
   compatibility from nullspace Crypt.cpp, with independent C++ fixtures and bounded
   handshake diagnostics. No Trench Wars packet capture or public test performed;
   the cause of the reported failure remains unconfirmed pending user retry.
+
+- Owner's subsequent Trench Wars retry produced a valid decrypted 139-byte 00 02
+  acknowledgement, followed by a decoded disconnect. This establishes receive-side
+  encryption interoperability for that attempt; login/server admission is not verified.
+  Extended bounded packet metadata diagnostics past the handshake, logged login
+  submission/result codes and session key challenge progress, and labeled disconnects
+  during login. No credentials, identity bytes, keys or packet bodies are logged.
+  No public-server test was initiated; the server's reason remains unknown.

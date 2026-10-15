@@ -272,10 +272,10 @@ impl Transport {
                         }
                         let Some(cipher) = &cont.cipher else { continue };
                         let decoded = cipher.decrypt_compatible(&buf[..n]);
-                        if matches!(self.state, State::Handshake { .. }) && cont.diagnostic_packets < 10 {
+                        if cont.diagnostic_packets < 32 {
                             match &decoded {
-                                Ok(pkt) => eprintln!("[Continuum] handshake reply: wire length {n}, decoded length {}, core type {:?}", pkt.len(), pkt.get(..2)),
-                                Err(error) => eprintln!("[Continuum] discarded handshake reply: wire length {n}, {error:?}"),
+                                Ok(pkt) => eprintln!("[Continuum] received packet: wire length {n}, decoded length {}, header {:?}", pkt.len(), pkt.get(..2)),
+                                Err(error) => eprintln!("[Continuum] discarded packet: wire length {n}, {error:?}"),
                             }
                             self.continuum.as_mut().unwrap().diagnostic_packets += 1;
                         }
@@ -392,6 +392,7 @@ impl Transport {
         match kind {
             0x12 if self.state == State::Connected && pkt.len() == 6 => {
                 let seed = u32_at(pkt, 2).unwrap();
+                eprintln!("[Continuum] received session key challenge");
                 if let Some(cont) = self.continuum.as_mut() {
                     if let Some(table) = (cont.expand)(seed) {
                         let mut response = vec![0, 0x13];
@@ -400,6 +401,7 @@ impl Transport {
                             response.extend_from_slice(&word.to_le_bytes());
                         }
                         self.send_raw(&response);
+                        eprintln!("[Continuum] sent session key challenge response");
                     } else {
                         self.fail("Continuum key expansion challenge could not be answered");
                     }

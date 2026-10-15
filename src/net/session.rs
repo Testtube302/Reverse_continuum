@@ -291,12 +291,19 @@ impl Session {
         for ev in self.transport.poll() {
             match ev {
                 Event::Connected => {
+                    eprintln!("[Session] encryption established");
                     self.note("encryption established".into());
                     self.send_login(false);
                     self.phase = Phase::LoggingIn;
                 }
                 Event::Packet(p) => self.handle(&p),
-                Event::Disconnected(why) => self.fail(why),
+                Event::Disconnected(why) => {
+                    let stage = match self.phase {
+                        Phase::LoggingIn => " during login",
+                        _ => "",
+                    };
+                    self.fail(format!("{why}{stage}"));
+                }
             }
         }
         self.update_doors();
@@ -469,6 +476,7 @@ impl Session {
         if let Some(identity) = self.continuum_id {
             p.extend_from_slice(&identity);
         }
+        eprintln!("[Session] sending login: packet type {:02x}, length {}, new user {new_user}", p[0], p.len());
         self.transport.send_reliable(&p);
     }
 
@@ -613,6 +621,7 @@ impl Session {
             0x0A => {
                 let code = p.get(1).copied().unwrap_or(0xFF);
                 let text = LOGIN_RESPONSES.get(code as usize).copied().unwrap_or("unknown");
+                eprintln!("[Session] login response {code}: {text}");
                 self.note(format!("login response {code}: {text}"));
                 match code {
                     0x00 | 0x0D => self.send_arena_login(),
