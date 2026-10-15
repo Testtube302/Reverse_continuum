@@ -5,6 +5,7 @@
 //!          chase:NAME = steer toward player NAME, keep ~10 tiles away and fire when lined up,
 //!          dist:N = chase distance in tiles (default 10),
 //!          every:MS = at most one shot per MS milliseconds, bomb = fire bombs instead of guns,
+//!          flags = collect dropped flags first (then chase),
 //!          freq:N = switch to team N after getting a ship
 
 use std::time::{Duration, Instant};
@@ -47,6 +48,7 @@ fn main() {
     let dist: f32 = modes.iter().find_map(|m| m.strip_prefix("dist:")).and_then(|d| d.parse().ok()).unwrap_or(10.0);
     let every: Option<u64> = modes.iter().find_map(|m| m.strip_prefix("every:")).and_then(|d| d.parse().ok());
     let bomb = modes.contains(&"bomb");
+    let want_flags = modes.contains(&"flags");
     let mut next_shot = Instant::now();
     let mut next_report = Instant::now() + Duration::from_secs(2);
     let mut next_chat = Instant::now() + Duration::from_secs(3);
@@ -72,7 +74,8 @@ fn main() {
             next_report += Duration::from_secs(2);
             report_chase(&game, target);
         }
-        let input = match (&chase, chase_input(&game, chase.as_deref(), dist)) {
+        let flag_input = if want_flags { flag_input(&game) } else { None };
+        let input = match (&chase, flag_input.or_else(|| chase_input(&game, chase.as_deref(), dist))) {
             (Some(_), Some(i)) => i,
             (Some(_), None) => Input::default(),
             _ => input,
@@ -125,6 +128,33 @@ fn report_chase(game: &Game, target: &str) {
         ),
         None => println!("chase: me {me:?}, no player named {target}"),
     }
+}
+
+/// Steering toward the nearest dropped flag, while there is one and we carry fewer than 3.
+fn flag_input(game: &Game) -> Option<Input> {
+    let ship = game.ship.as_ref()?;
+    let s = game.session.as_ref()?;
+    if s.me().is_some_and(|m| m.flags_carried >= 3) {
+        return None;
+    }
+    let near = s.flags.values().filter(|f| f.dropped).min_by(|a, b| {
+        let d = |f: &&aicontinuum::net::session::Flag| {
+            let (dx, dy) = (f.x as f32 + 0.5 - ship.position.x, f.y as f32 + 0.5 - ship.position.y);
+            dx * dx + dy * dy
+        };
+        d(a).total_cmp(&d(b))
+    })?;
+    let (dx, dy) = (near.x as f32 + 0.5 - ship.position.x, near.y as f32 + 0.5 - ship.position.y);
+    let want = (dx.atan2(-dy) / std::f32::consts::TAU).rem_euclid(1.0);
+    let diff = (want - ship.orientation + 1.5).rem_euclid(1.0) - 0.5;
+    let speed = (ship.velocity.x * ship.velocity.x + ship.velocity.y * ship.velocity.y).sqrt();
+    Some(Input {
+        right: diff > 0.01,
+        left: diff < -0.01,
+        forward: diff.abs() < 0.1 && speed < 6.0,
+        backward: diff.abs() > 0.3 && speed > 2.0,
+        ..Default::default()
+    })
 }
 
 /// Steering toward a named player: turn to face them, thrust when far, back off when close,

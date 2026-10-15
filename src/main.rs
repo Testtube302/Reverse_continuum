@@ -477,7 +477,7 @@ async fn main() {
             // F1 pages through help, closing after the last page.
             help_page = match help_page {
                 None => Some(0),
-                Some(p) if p + 1 < hud::HELP_PAGE_COUNT => Some(p + 1),
+                Some(p) if p + 1 < hud.help.len() => Some(p + 1),
                 Some(_) => None,
             };
         }
@@ -707,7 +707,7 @@ fn draw_world(game: &Game, tiles: &Tiles, gfx: &Graphics, hud: &mut hud::Hud) {
                 .energy_tick
                 .filter(|t| now.wrapping_sub(*t) < 300)
                 .map(|_| (p.energy, _settings.ships[p.ship as usize].initial_energy));
-            hud.name_label(&p.name, p.bounty, p.ping as u32 * 10, view_freq == Some(p.freq), energy, (x, y));
+            hud.name_label(&p.name, p.bounty, p.flags_carried, p.ping as u32 * 10, view_freq == Some(p.freq), energy, (x, y));
         }
     }
 

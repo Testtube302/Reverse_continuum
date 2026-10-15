@@ -92,6 +92,15 @@
       safe-zone tiles alternate between two tints frame to frame (check: may be capture tearing).
       Online --at now also places our first ship (test aid). Commands.hlp in the install is
       probably the F1 help text — Ryan OK'd matching the original help (2026-10-15).
+      Round 9: F1 help = the install's Commands.hlp, read at runtime (src/help.rs; our own pages
+      only if the file is missing). Pages start at '# ' lines (title drawn without '#'); codes
+      %W white %G green %B blue %R dark red %Y yellow %p pink, other %x literal; colour carries
+      across lines; box width = widest line, bottom border at 19 + 12 x the section's line
+      count (blank line before the next page included), at most 36 lines; 29 pages, F1 after
+      the last closes. All 29 pages pixel-identical inside the box (only cut corners differ).
+      Flag carriers: "name(bounty:flags)[ping]" in DarkRed for enemies (seen: Terr(70:2)[10]);
+      implemented, but the side-by-side check is still open — examples/bot `flags` mode didn't
+      pick a flag up (steering needs work). Team carriers' colour unknown (kept yellow).
       TODO: name-tag toggles, LED rows 1-2 meaning (currently 0),
       bg sparkle objects (bg01-14), door animation, flags, LVZ, in-ship full-screen diff with
       matched state (original's ship had multiprize upgrades), Windows clock offset (uses `date`).
@@ -131,8 +140,9 @@
 - Rig helpers: tools/ref-rig/rx.sh (run in container, optional screenshot → ~/aicontinuum-ref/shots;
   C=aic-wine5 to target the original's container) and crop.sh. Start: `docker start aic-ref aic-wine5`,
   clear /tmp/.X99-lock, start Xvfb :99 x16, zone-restart.sh, then join5.sh in aic-wine5.
-- Next round planned: F1 help from Commands.hlp, flag-carrier labels, bomb trails (trail.png),
-  afterburner/remote exhaust, then whole-screen in-ship diff with matched state.
+- Next round planned: confirm flag-carrier labels side by side (fix bot `flags` steering),
+  bomb trails (trail.png), afterburner/remote exhaust, whole-screen in-ship diff.
+- After a help capture the original is left with an F1 page open: press F1 until it closes.
 
 ## Original Continuum under Wine
 - Installed copy: ~/.wine-aicontinuum/drive_c/Continuum (zone.dat has "AIC Local,127.0.0.1,5000"

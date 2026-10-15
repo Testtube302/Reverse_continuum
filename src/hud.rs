@@ -4,6 +4,7 @@
 
 use aicontinuum::assets::AssetDir;
 use aicontinuum::game::Game;
+use aicontinuum::help::{self, HelpColor, HelpPage};
 use aicontinuum::lvl::{FIRST_DOOR, LAST_DOOR, TILE_GOAL, TILE_SAFE};
 use aicontinuum::sim::{Ship, Vec2};
 use macroquad::prelude::*;
@@ -68,6 +69,8 @@ pub struct Hud {
     /// Whole-map radar image for zooms where it's under 1024 px, keyed by (map, size).
     radar_small: Option<((usize, u32), Vec<[u8; 3]>)>,
     pub chat_input: Option<String>,
+    /// F1 help pages: the install's Commands.hlp, or our own if it has none.
+    pub help: Vec<HelpPage>,
 }
 
 /// Rows of `colors.png` used for radar and borders (column 0 = static colour).
@@ -101,6 +104,11 @@ impl Hud {
             radar: None,
             radar_small: None,
             chat_input: None,
+            help: {
+                let text = assets.read("Commands.hlp").map(|b| String::from_utf8_lossy(&b).into_owned());
+                let pages = help::parse(text.as_deref().unwrap_or(help::FALLBACK));
+                if pages.is_empty() { help::parse(help::FALLBACK) } else { pages }
+            },
         }
     }
 
@@ -430,8 +438,16 @@ impl Hud {
 
     /// "name(bounty)[ping ms]" 14 px right/down of the ship's centre (team yellow, enemies blue),
     /// plus the ship's energy right-aligned to its left when the zone has sent it recently.
-    pub fn name_label(&self, name: &str, bounty: u16, ping_ms: u32, team: bool, energy: Option<(u16, u32)>, center: (f32, f32)) {
-        let color = if team { TextColor::Yellow } else { TextColor::Blue };
+    /// Flag carriers show "name(bounty:flags)[ping]", dark red for enemies (measured; a team
+    /// carrier's colour hasn't been seen yet and stays yellow).
+    #[allow(clippy::too_many_arguments)]
+    pub fn name_label(&self, name: &str, bounty: u16, flags: u16, ping_ms: u32, team: bool, energy: Option<(u16, u32)>, center: (f32, f32)) {
+        let color = match (team, flags > 0) {
+            (true, _) => TextColor::Yellow,
+            (false, true) => TextColor::DarkRed,
+            (false, false) => TextColor::Blue,
+        };
+        let bounty = if flags > 0 { format!("{bounty}:{flags}") } else { bounty.to_string() };
         self.text(&format!("{name}({bounty})[{ping_ms}]"), color, center.0 + 14.0, center.1 + 14.0);
         if let Some((energy, initial)) = energy {
             let text = energy.to_string();
@@ -595,71 +611,15 @@ pub fn draw_statbox(hud: &Hud, game: &Game) {
     }
 }
 
-/// Our own F1 help pages (the original's help text is Continuum's prose and isn't copied).
-/// Lines starting with '#' are section headings (yellow); `KEY<tab>text` lines put the key in
-/// yellow and the description in white, like the original's layout.
-const HELP_PAGES: [(&str, &str); 3] = [
-    (
-        "Controls",
-        "#Flying\n\
-         Up/Down\tThrust forward / reverse\n\
-         Left/Right\tTurn\n\
-         Shift\tAfterburner\n\
-         \n\
-         #Weapons\n\
-         Ctrl\tFire guns\n\
-         Tab\tFire a bomb\n\
-         Shift+Tab\tLay a mine\n\
-         Delete\tToggle multifire (once you have it)\n\
-         \n\
-         #Ships and screens\n\
-         1-8\tChoose a ship\n\
-         S\tSpectate\n\
-         Esc\tMenu (Q quits)\n\
-         F1\tNext help page\n\
-         F2\tPlayer list",
-    ),
-    (
-        "Chat",
-        "#Sending\n\
-         Enter\tStart typing; Enter again sends to everyone\n\
-         Esc\tCancel the message\n\
-         \n\
-         #Reading\n\
-         Blue\tPublic messages: name> text\n\
-         Yellow\tYour team\n\
-         Green\tPrivate messages, and zone messages\n\
-         Red\tWarnings from the zone",
-    ),
-    (
-        "About",
-        "#AIContinuum\n\
-         A clean-room SubSpace client written in Rust.\n\
-         It reads the original game's art and sounds from\n\
-         your own Continuum folder and plays on standard\n\
-         zones that accept VIE clients.",
-    ),
-];
-
-pub const HELP_PAGE_COUNT: usize = HELP_PAGES.len();
-
 /// Draws help page `page` in a bevelled box at the top left, sized to its text.
+const HELP_MAX_LINES: usize = 36;
+
 pub fn draw_help(hud: &Hud, page: usize) {
-    let (topic, body) = HELP_PAGES[page % HELP_PAGES.len()];
-    let title = format!("Help: {topic} (F1 for more)");
-    const KEY_COL: usize = 12;
-    let lines: Vec<&str> = body.lines().map(str::trim_start).collect();
-    let width_chars = lines
-        .iter()
-        .map(|l| match l.split_once('\t') {
-            Some((_, text)) => KEY_COL + text.len(),
-            None => l.trim_start_matches('#').len(),
-        })
-        .chain([title.len() + 1])
-        .max()
-        .unwrap_or(10);
-    let w = width_chars as f32 * FONT_W + 4.0;
-    let h = 16.0 + lines.len() as f32 * FONT_H + 4.0;
+    let Some(page) = hud.help.get(page) else { return };
+    let w = page.width_chars().max(page.title.chars().count() + 1) as f32 * FONT_W + 4.0;
+    // Bottom border at 19 + 12 per line; the original shows at most 36 lines (measured).
+    let lines = &page.lines[..page.lines.len().min(HELP_MAX_LINES)];
+    let h = 15.0 + lines.len() as f32 * FONT_H;
     let (x0, x1, y0, y1) = (0.0, w + 5.0, 0.0, h + 5.0);
     hud.swatch(ColorRow::Background, x0 + 3.0, y0 + 3.0, x1 - x0 - 5.0, y1 - y0 - 5.0);
     for (inset, row, cut) in [(2.0, ColorRow::Border1, 0.0), (1.0, ColorRow::Border2, 0.0), (0.0, ColorRow::Border3, 2.0)] {
@@ -669,17 +629,20 @@ pub fn draw_help(hud: &Hud, page: usize) {
         hud.swatch(row, l, t + cut, 1.0, b - t + 1.0 - 2.0 * cut);
         hud.swatch(row, r, t + cut, 1.0, b - t + 1.0 - 2.0 * cut);
     }
-    hud.text(&title, TextColor::Green, 13.0, 4.0);
+    hud.text(&page.title, TextColor::Green, 13.0, 4.0);
     hud.swatch(ColorRow::Border1, x0 + 3.0, 16.0, x1 - x0 - 5.0, 1.0);
     for (i, line) in lines.iter().enumerate() {
-        let y = 18.0 + i as f32 * FONT_H;
-        if let Some(heading) = line.strip_prefix('#') {
-            hud.text(heading, TextColor::Yellow, 5.0, y);
-        } else if let Some((key, text)) = line.split_once('\t') {
-            hud.text(key, TextColor::Yellow, 5.0, y);
-            hud.text(text, TextColor::White, 5.0 + KEY_COL as f32 * FONT_W, y);
-        } else {
-            hud.text(line, TextColor::White, 5.0, y);
+        let mut x = 5.0;
+        for (color, text) in line {
+            let color = match color {
+                HelpColor::White => TextColor::White,
+                HelpColor::Green => TextColor::Green,
+                HelpColor::Blue => TextColor::Blue,
+                HelpColor::DarkRed => TextColor::DarkRed,
+                HelpColor::Yellow => TextColor::Yellow,
+                HelpColor::Pink => TextColor::Pink,
+            };
+            x += hud.text(text, color, x, 18.0 + i as f32 * FONT_H);
         }
     }
 }
