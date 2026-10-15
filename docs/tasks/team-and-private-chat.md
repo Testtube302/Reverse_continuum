@@ -29,7 +29,7 @@ The packet is C2S `0x06`: `type u8, sound u8, target pid u16, text NUL-terminate
 
 - Unit tests cover prefix parsing: each prefix, an empty message, a lone `:`, `:name:` with no
   text, and a long line truncated like today's 240 bytes.
-- `cargo test` and `cargo clippy --all-targets` are clean.
+- `cargo test` passes, and `cargo clippy --all-targets` shows no new warnings in the code you touched.
 - Live check against `47.207.117.75:5000` (or a local Subspace Server .NET), using two clients.
   `examples/bot.rs` can be the second one. A team message reaches only teammates, a `:name:`
   message reaches only that player, and the zone's chat log shows the right types.

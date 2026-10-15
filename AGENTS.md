@@ -29,7 +29,7 @@ detail, round by round. Add your new facts there, in the same terse style.
 cargo build --release                                  # Mac/Linux binary: target/release/AIContinuum
 cargo build --release --target x86_64-pc-windows-gnu   # Windows .exe (needs mingw-w64)
 cargo test                                             # unit tests; must pass before you commit
-cargo clippy --all-targets                             # keep it warning-free
+cargo clippy --all-targets                             # don't add warnings (some older ones exist)
 ```
 
 Tests that need more than the repo skip themselves unless configured:
