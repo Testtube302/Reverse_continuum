@@ -3,9 +3,11 @@ use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::PathBuf;
 
 mod hud;
+mod menu;
 
 use aicontinuum::assets::AssetDir;
 use aicontinuum::game::{EffectKind, Game};
+use aicontinuum::launcher::Action;
 use aicontinuum::lvl::{Map, TILE_PIXELS};
 use aicontinuum::net::session::{Config, Phase, SPECTATOR, Session};
 use aicontinuum::settings::ArenaSettings;
@@ -55,6 +57,11 @@ struct Args {
     throw_after: Option<u32>,
     /// Test aid: once we carry a ball, put our ship at (x, y) facing direction d, then throw.
     carry_to: Option<(f32, f32, u8)>,
+    /// Startup-screen test aids: a fixed mouse position, the right button held, a dialog to open.
+    mouse: Option<(i32, i32)>,
+    right_held: bool,
+    open: Option<String>,
+    autoplay: bool,
 }
 
 fn parse_args() -> Args {
@@ -80,6 +87,10 @@ fn parse_args() -> Args {
         attach_to: None,
         throw_after: None,
         carry_to: None,
+        mouse: None,
+        right_held: false,
+        open: None,
+        autoplay: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -107,7 +118,16 @@ fn parse_args() -> Args {
             "--script-fire" => args.script_fire = true,
             "--script-rocket" => args.script_rocket = true,
             "--mute" => args.mute = true,
-            "--fullscreen" => {}
+            "--fullscreen" | "--offline" | "--launcher" => {}
+            "--mouse" => {
+                let v: Vec<i32> = value().split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                if let [x, y] = v[..] {
+                    args.mouse = Some((x, y));
+                }
+            }
+            "--right" => args.right_held = true,
+            "--autoplay" => args.autoplay = true,
+            "--open" => args.open = Some(value()),
             "--menu" => args.menu = true,
             "--statbox" => args.statbox = Some(value().parse().unwrap_or(0)),
             "--help-page" => args.help = value().parse().ok(),
@@ -135,7 +155,9 @@ fn parse_args() -> Args {
 fn window_conf() -> Conf {
     // Read before macroquad starts: --fullscreen gives an exact 1024x768 surface without decorations.
     let fullscreen = std::env::args().any(|a| a == "--fullscreen");
-    Conf { window_title: "AIContinuum".into(), window_width: 1024, window_height: 768, fullscreen, ..Default::default() }
+    // The startup screen opens at the default skin's size; the game resizes to 1024x768.
+    let (window_width, window_height) = if launcher_mode() { (640, 496) } else { (1024, 768) };
+    Conf { window_title: "AIContinuum".into(), window_width, window_height, fullscreen: fullscreen && !launcher_mode(), ..Default::default() }
 }
 
 fn die(msg: impl std::fmt::Display) -> ! {
@@ -402,8 +424,40 @@ fn read_input() -> Input {
 
 #[macroquad::main(window_conf)]
 async fn main() {
-    let mut args = parse_args();
+    let args = parse_args();
     let assets = AssetDir::locate(args.assets.as_deref()).unwrap_or_else(|e| die(e));
+    if !launcher_mode() {
+        return run_game(args, &assets).await;
+    }
+    let mut screen = menu::MenuScreen::load(&assets).unwrap_or_else(|e| die(e));
+    loop {
+        match screen.run(&args).await {
+            Some(Action::Play { addr, name, password, ship, .. }) => {
+                let mut game_args = parse_args();
+                game_args.connect = Some(addr);
+                game_args.name = name;
+                game_args.password = password;
+                game_args.ship = (ship < 8).then_some(ship);
+                request_new_screen_size(1024.0, 768.0);
+                next_frame().await;
+                run_game(game_args, &assets).await;
+                if args.screenshot.is_some() {
+                    break;
+                }
+            }
+            _ => break,
+        }
+    }
+}
+
+/// The startup screen comes first unless the command line already says what to play.
+fn launcher_mode() -> bool {
+    let a: Vec<String> = std::env::args().collect();
+    a.iter().any(|a| a == "--launcher") || !a.iter().any(|a| ["--connect", "--map", "--offline", "--screenshot"].contains(&a.as_str()))
+}
+
+async fn run_game(mut args: Args, assets: &AssetDir) {
+    let assets = assets;
     let gfx = Graphics::load(&assets);
     let mut hud = hud::Hud::load(&assets);
     hud.statbox = args.statbox;

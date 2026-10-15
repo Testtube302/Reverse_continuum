@@ -291,3 +291,28 @@
 ## Open items
 - Debug text overlay + macroquad text labels in main.rs are temporary until the real HUD (M4).
 - Haven't yet run the original Continuum.exe under Wine against the local zone (integration phase).
+
+## Startup screen (src/skin.rs, src/launcher.rs, src/menu.rs)
+- Runs when no --connect/--map/--offline/--screenshot is given (--launcher forces it). Play joins
+  the selected zone; leaving the game returns to it. Profile and zone list are the install's
+  `profile.dat` (`key = value`) and `zone.dat` (`name,ip,port,dns,shown` + `#description`).
+- Skin format is documented in the install's `skins/skins.txt`. The built-in skin is read from
+  `menures.dll` resources: its description text, a 640x576 8-bit sheet (main region 640x496 plus
+  overlays below) and the 36x36 spectate icon. `.skn` = BMP with the text appended.
+- Measured against the original at 16 bpp, 0 differing pixels on the main screen and all 19 hover
+  states (only the live ping digit can differ):
+  - ship buttons: ships.bm2 frame 5 (ship k row k*4, column 5) at +2,+2; the selected ship or
+    spectate draws its ALT overlay; hovering ships draws nothing. Buttons draw ALT on hover.
+  - menutext.bm2 font, 8x12, 8 bands of 96 glyphs (2 rows of 48): profile text band 4 at
+    PROFTEXT, 16 px pitch. INFOBOX: band 4, wrapped at 27 chars, centred on (x0+x1)/2, top-down
+    14 px pitch, lines past the box dropped. Help strings captured from the original's INFO box.
+  - zone rows: y = ZONETEXT.y0 + 14*row; bar (x0, y-2) to (x1-1, y+12), edge (99,97,165) fill
+    (66,65,132) as read at 16 bpp; ping right-aligned ending x0+28, name at x0+40 (band 1 up,
+    band 3 no reply), players band 4 right-aligned ending x1-4; down zones show no numbers.
+  - ping colour thresholds above green (200/400 ms) are guesses.
+- Zone ping: UDP to port+1, send 4-byte stamp, reply `<players u32><stamp>` (low 16 bits used).
+- Directory servers: core protocol to UDP 4990 (our Transport, VIE), reliable request
+  `01 <min players u32>`, reply `01` + entries `ip[4] port u16 players u16 billing u16
+  version u32 name[64] description\0` (sharvil/subspace starlight ConfigDialog.cpp). Live:
+  sscuservers, trenchwars, poid.be (ssdir.playsubspace.com is dead).
+- The zones/profile dialogs are functional stand-ins; the original's are Win32 dialogs (next).
