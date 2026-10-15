@@ -292,6 +292,10 @@ impl Session {
             .map(|(kind, count)| format!("{kind:02x}:{count}"))
             .collect();
         eprintln!("[Session] received game packet counts: {}", counts.join(", "));
+        // Preserve only recent server notices, not player/private conversations.
+        for chat in self.chat.iter().rev().filter(|c| matches!(c.kind, 0 | 6 | 8)).take(8).collect::<Vec<_>>().into_iter().rev() {
+            eprintln!("[Session] server notice (type {}): {:?}", chat.kind, chat.text);
+        }
         self.note(format!("failed: {why}"));
         self.phase = Phase::Failed(why);
     }

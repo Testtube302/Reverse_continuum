@@ -445,3 +445,12 @@
   did not expose this difference. Added synthetic encrypted-session regression and
   transfer/reliable queue sizes on disconnect. This difference is confirmed, but
   its causal role in Trench Wars' disconnect is not yet established.
+
+- Owner retry at 14:47:30 still disconnected after exactly 4,800 huge-chunk bytes;
+  next reliable ID 41, no buffered out-of-order packets, no unacked outgoing
+  requests. Indexed request did not resolve it. New loopback regression transfers
+  14,400 bytes in three ten-packet windows, reorders chunks, verifies every encrypted
+  acknowledgement and final byte-for-byte reassembly; passes with the full suite.
+  This does not prove legacy server interoperability. Preserve the last eight server
+  arena/warning/error notices at failure (escaped text); omit player/private chat.
+  Three chat packets were seen on the failing run, but their content was not retained.

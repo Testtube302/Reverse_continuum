@@ -403,3 +403,43 @@ fn continuum_session_requests_map_with_file_index() {
     }
     assert!(found, "missing indexed Continuum map request");
 }
+
+#[test]
+fn large_encrypted_download_crosses_multiple_ack_windows() {
+    let (mut client, server, addr) = pair(|_| Some([0; 20]));
+    let cipher = reference_cipher();
+    server.send_to(&RESPONSE, addr).unwrap();
+    settle(&mut client);
+    assert_eq!(receive(&server), ACK);
+    server.send_to(&cipher.encrypt(&[0, 2]).unwrap(), addr).unwrap();
+    assert!(settle(&mut client).contains(&Event::Connected));
+    receive(&server); // initial sync
+    let mut whole: Vec<u8> = (0..14_400).map(|i| (i % 251) as u8).collect();
+    whole[0] = 0x2a;
+    for batch in 0..3u32 {
+        // Reorder the first two chunks of each window to exercise reliable buffering.
+        let order = [1, 0, 2, 3, 4, 5, 6, 7, 8, 9];
+        for offset in order {
+            let id = batch * 10 + offset;
+            let mut packet = vec![0, 3];
+            packet.extend_from_slice(&id.to_le_bytes());
+            packet.extend_from_slice(&[0, 0x0a]);
+            packet.extend_from_slice(&(whole.len() as u32).to_le_bytes());
+            let start = id as usize * 480;
+            packet.extend_from_slice(&whole[start..start + 480]);
+            server.send_to(&cipher.encrypt(&packet).unwrap(), addr).unwrap();
+        }
+        let events = settle(&mut client);
+        if batch < 2 { assert!(events.is_empty()); }
+        else { assert_eq!(events, vec![Event::Packet(whole.clone())]); }
+        let ack = cipher.decrypt(&receive(&server)).unwrap();
+        assert_eq!(&ack[..2], &[0, 0x0e]);
+        let mut ids = Vec::new();
+        for entry in ack[2..].chunks_exact(7) {
+            assert_eq!(&entry[..3], &[6, 0, 4]);
+            ids.push(u32::from_le_bytes(entry[3..7].try_into().unwrap()));
+        }
+        ids.sort_unstable();
+        assert_eq!(ids, (batch * 10..batch * 10 + 10).collect::<Vec<_>>());
+    }
+}
