@@ -9,9 +9,14 @@ The transport finalizes that table with key1, sends the plaintext acknowledgemen
 waits for the encrypted server acknowledgement, then transports encrypted packets.
 Returning None fails explicitly; no dummy table or VIE fallback is substituted.
 
-**This is not yet a working game-login mode.** Key2 expansion is still absent, and
-the game session still uses VIE. No key-expansion service, executable-integrity
-response, or client identity bypass is implemented.
+**Continuum encrypted login now works in the controlled test using a local reference
+adapter.** `Session::connect_continuum` sends the 165-byte login and the CLI accepts
+`--continuum-expander /path/to/helper`. The adapter expands arbitrary key2 values
+locally by emulating a pinned original-code image. It is **not a standalone Rust
+rewrite** of expansion, and the original-code image is not bundled or committed.
+Default connections still use VIE. Executable integrity responses and billing
+identity generation are not implemented; compatibility with all public zones is
+not established.
 
 The public nullspace cipher was ported under MIT, with its license included here.
 REA/Ghidra observations were used to corroborate the transport structure; no
@@ -192,3 +197,69 @@ memory was excluded. REA/Ghidra raw x86 analysis with 552 prologue candidates
 recovered 1,561 candidate procedures and 954 defined strings. These are analysis
 observations, not verified function boundaries. The code copy and decompilation
 remain outside the repository.
+
+## Working local reference adapter and login
+
+The key expansion path was identified at `0x457d60` followed by `0x458be0` in the
+approved image. The first fills and transforms twenty words; the second applies
+an additional transformation using obfuscated branches, floating-point operations,
+and integer exceptions. The public key1 finalization remains the separate third
+step in Rust. The local adapter interprets the original instructions with Unicorn
+2.1.4, synthetic object/stack/CRT state, and a bounded C++ integer-catch adapter.
+It has no host Windows API bridge or network service. Each expansion has instruction
+and time limits; the Rust caller also limits helper execution to five seconds.
+
+Validation on this Mac:
+
+- All **1,024** expanded records in the independent local server cache match the
+  adapter byte-for-byte. This comparison uses a pre-existing cache, not its own
+  generated vectors. No server cache data is committed.
+- `expansion-vectors.txt` contains 32 additional synthetic-key outputs, including
+  zero, all-ones and high-bit boundaries. These are regression fixtures from the
+  emulated reference, not independent mathematical proof for every 32-bit key.
+- The Rust Session logged in through the native Continuum module, entered the
+  arena, and downloaded map/settings using the adapter, without reading `scrty1`.
+- A second connection remained active for **90 seconds**, sending one periodic
+  security response. Server configuration and whitelist were not changed.
+- Eight synthetic UDP integration tests cover the prior transport cases plus
+  the 165-byte login layout and encrypted `00 12` / `00 13` expansion challenges.
+
+The reference image must match the recorded SHA-256. A fresh runtime capture may
+have different relocated imports; it is not accepted automatically. This adapter
+is a reproducible development bridge for the approved image, not a distributable
+replacement for independently implementing the expansion transformations.
+
+The helper contract is one decimal key argument and exactly 80 binary stdout bytes.
+Errors go to stderr and produce a failed connection; no VIE fallback is attempted.
+The optional CLI mode sends an unspecified (all-zero) 64-byte billing identity.
+Zone servers treat that field as opaque; billing systems may reject it. The existing
+executable checksum remains zero. Servers enforcing the original executable's
+integrity may reject the client even when encryption is correct.
+
+To use a caller-provided compatible helper:
+
+```sh
+cargo run --example continuum_login -- 127.0.0.1:5000 /absolute/path/to/expander 90
+cargo run --release -- --assets /path/to/Continuum --connect 127.0.0.1:5000 --continuum-expander /absolute/path/to/expander --name YourName --password YourPassword
+```
+
+For the included reference adapter, install `unicorn==2.1.4` into an isolated Python
+environment, set `AICONTINUUM_RUNTIME_CODE` to the approved local image, and invoke
+`tools/protocol/continuum_reference_expander.py` with that environment's interpreter.
+Use an executable wrapper when passing it as `--continuum-expander`. On this Mac,
+Unicorn's cache initialization needs execution outside Codex's restricted sandbox.
+The emulator and original image are not included in the game executable.
+
+Protocol sources: public nullspace `Connection.cpp` documents the 86-byte expansion
+response (`00 13`, seed, twenty words); SS.NET `LoginPacket.cs` documents the
+165-byte Continuum login and opaque billing field. No executable-integrity spoofing
+or borrowed billing identity is part of this implementation.
+
+To reproduce the reference-adapter checks with its Python environment:
+
+```sh
+python tools/protocol/check_continuum_reference.py /path/to/approved-runtime-code.bin --server-cache /path/to/server/scrty1
+```
+
+Omit `--server-cache` for synthetic-vector checks only. The user elected to keep
+all login verification local; no public-zone login was performed.

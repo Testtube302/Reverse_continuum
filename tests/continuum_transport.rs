@@ -258,3 +258,84 @@ fn rejects_invalid_encrypted_acknowledgement() {
     );
     no_packet(&server);
 }
+
+#[test]
+fn answers_encrypted_expansion_challenge_without_changing_session_key() {
+    let (mut client, server, addr) = pair(|seed| {
+        if seed == 0x83cd0cb1 {
+            Some([0; 20])
+        } else if seed == 123 {
+            Some([0xabcdef01; 20])
+        } else {
+            None
+        }
+    });
+    let cipher = reference_cipher();
+    server.send_to(&RESPONSE, addr).unwrap();
+    settle(&mut client);
+    assert_eq!(receive(&server), ACK);
+    server
+        .send_to(&cipher.encrypt(&[0, 2, 0, 0, 0, 0]).unwrap(), addr)
+        .unwrap();
+    assert_eq!(settle(&mut client), vec![Event::Connected]);
+    receive(&server); // sync
+    server
+        .send_to(&cipher.encrypt(&[0, 0x12, 123, 0, 0, 0]).unwrap(), addr)
+        .unwrap();
+    assert!(settle(&mut client).is_empty());
+    let response = cipher.decrypt(&receive(&server)).unwrap();
+    assert_eq!(&response[..6], &[0, 0x13, 123, 0, 0, 0]);
+    assert_eq!(&response[6..], &[1, 0xef, 0xcd, 0xab].repeat(20));
+    server
+        .send_to(&cipher.encrypt(&[0, 0x12, 123]).unwrap(), addr)
+        .unwrap();
+    assert!(settle(&mut client).is_empty());
+    no_packet(&server);
+    server
+        .send_to(&cipher.encrypt(&[0, 0x12, 124, 0, 0, 0]).unwrap(), addr)
+        .unwrap();
+    assert!(matches!(
+        settle(&mut client).as_slice(),
+        [Event::Disconnected(_)]
+    ));
+}
+
+#[test]
+fn session_uses_continuum_login_layout_only_after_encrypted_ack() {
+    use aicontinuum::net::session::{Config, Session};
+    let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+    server
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .unwrap();
+    let config = Config {
+        server: server.local_addr().unwrap(),
+        name: "SyntheticCont".into(),
+        password: "synthetic".into(),
+        arena: None,
+        map_dir: std::env::temp_dir(),
+    };
+    let mut session = Session::connect_continuum(config, |_| Some([0; 20]), [0x5a; 64]).unwrap();
+    let mut buf = [0; 2048];
+    let (_, addr) = server.recv_from(&mut buf).unwrap();
+    server.send_to(&RESPONSE, addr).unwrap();
+    std::thread::sleep(Duration::from_millis(20));
+    session.update();
+    assert_eq!(receive(&server), ACK);
+    no_packet(&server);
+    let cipher = reference_cipher();
+    server
+        .send_to(&cipher.encrypt(&[0, 2, 0, 0, 0, 0]).unwrap(), addr)
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(20));
+    session.update();
+    assert_eq!(&cipher.decrypt(&receive(&server)).unwrap()[..2], &[0, 5]);
+    let reliable = cipher.decrypt(&receive(&server)).unwrap();
+    assert_eq!(&reliable[..2], &[0, 3]);
+    let login = &reliable[6..];
+    assert_eq!(login.len(), 165);
+    assert_eq!(&login[..2], &[0x24, 0]);
+    assert_eq!(&login[2..15], b"SyntheticCont");
+    assert_eq!(&login[75..77], &40u16.to_le_bytes());
+    assert_eq!(&login[101..], &[0x5a; 64]);
+    session.disconnect();
+}

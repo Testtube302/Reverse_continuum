@@ -398,3 +398,16 @@
 - User explicitly approved bounded transfer of reference read-only executable
   memory to local temporary analysis. REA/Ghidra recovered 1,561 candidate
   functions; analysis files remain outside the repository.
+
+- Recovered arbitrary-key expansion using pinned reference code locally under
+  Unicorn 2.1.4: 0x457d60 then 0x458be0, synthetic CRT rounding toward -infinity,
+  and bounded integer-exception dispatch. All 1,024 independent server cache
+  records match. Added 32 synthetic-key vectors; no original code/cache committed.
+- Added opt-in Session/CLI Continuum login and local helper protocol; encrypted
+  00 12 challenges receive 00 13 + seed + 80-byte expansion. Headless login
+  entered the local arena with map/settings, then a second run held 90 seconds
+  with one security reply. No server configuration/whitelist change.
+- Important: reference adapter depends on an external pinned original-code image;
+  it is not a standalone Rust expansion rewrite. Billing identity is unspecified
+  and executable checksum remains zero; all-public-zone compatibility unproven.
+- Public-zone verification was declined by the user; no public-zone login was sent.

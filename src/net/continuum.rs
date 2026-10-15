@@ -4,7 +4,7 @@
 //! See docs/research/continuum/LICENSE-nullspace and README.md for sources and limits.
 //! Callers must supply an expanded or finalized session table; the server's two
 //! handshake words are not this table. Transport supports an external key lookup;
-//! the game's default session still uses VIE.
+//! the game's default session still uses VIE; opt-in Continuum sessions use a provider.
 
 pub const MAX_PLAINTEXT: usize = 520;
 pub const MAX_CIPHERTEXT: usize = MAX_PLAINTEXT + 2;

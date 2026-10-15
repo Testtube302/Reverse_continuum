@@ -26,6 +26,7 @@ struct Args {
     assets: Option<PathBuf>,
     map: Option<PathBuf>,
     connect: Option<SocketAddr>,
+    continuum_expander: Option<PathBuf>,
     name: String,
     password: String,
     arena: Option<String>,
@@ -79,6 +80,7 @@ fn parse_args() -> Args {
         assets: None,
         map: None,
         connect: None,
+        continuum_expander: None,
         name: "AIContinuum".into(),
         password: "aicontinuum".into(),
         arena: None,
@@ -118,6 +120,7 @@ fn parse_args() -> Args {
                 let addr = v.to_socket_addrs().ok().and_then(|mut a| a.next());
                 args.connect = Some(addr.unwrap_or_else(|| panic!("cannot resolve {v}")));
             }
+            "--continuum-expander" => args.continuum_expander = Some(PathBuf::from(value())),
             "--name" => args.name = value(),
             "--password" => args.password = value(),
             "--arena" => args.arena = Some(value()),
@@ -556,7 +559,16 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
                 arena: args.arena.clone(),
                 map_dir: assets.path("zones").join(zone_dir),
             };
-            Game::online(Session::connect(config).unwrap_or_else(|e| die(format!("connect {server}: {e}"))))
+            let session = if let Some(program) = &args.continuum_expander {
+                let mut expander = aicontinuum::net::continuum_expander::CommandExpander::new(program.clone());
+                Session::connect_continuum(config, move |seed| match expander.expand(seed) {
+                    Ok(table) => Some(table),
+                    Err(error) => { eprintln!("Continuum expansion: {error}"); None }
+                }, [0; 64])
+            } else {
+                Session::connect(config)
+            };
+            Game::online(session.unwrap_or_else(|e| die(format!("connect {server}: {e}"))))
         }
         None => {
             let map_path = args.map.clone().or_else(|| {

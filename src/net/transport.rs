@@ -377,6 +377,21 @@ impl Transport {
         }
         let Some(&kind) = pkt.get(1) else { return };
         match kind {
+            0x12 if self.state == State::Connected && pkt.len() == 6 => {
+                let seed = u32_at(pkt, 2).unwrap();
+                if let Some(cont) = self.continuum.as_mut() {
+                    if let Some(table) = (cont.expand)(seed) {
+                        let mut response = vec![0, 0x13];
+                        response.extend_from_slice(&seed.to_le_bytes());
+                        for word in table {
+                            response.extend_from_slice(&word.to_le_bytes());
+                        }
+                        self.send_raw(&response);
+                    } else {
+                        self.fail("Continuum key expansion challenge could not be answered");
+                    }
+                }
+            }
             0x02 => {
                 if let (State::Handshake { .. }, Some(key)) = (self.state, u32_at(pkt, 2)) {
                     let valid = if let Some(cont) = &self.continuum {
