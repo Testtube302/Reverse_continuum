@@ -480,3 +480,18 @@
   coverage; 84 unit tests and 12 synthetic UDP tests pass (one unit test ignored).
   Real-server integration tests remain opt-in. Desktop launcher enables the trace;
   no public-server login initiated and no new disconnect fix claimed.
+
+- Owner explicitly authorized an original-client public Trench Wars comparison and
+  use of the saved account in the isolated Wine VM, then explicitly approved account
+  creation after the official client reported Unknown name. A temporary UDP relay
+  restricted to game/ping ports 5400/5401 used the Mac's public route, preserving the
+  containers' network=none isolation. Entered the saved password through the masked
+  UI; no credentials logged or committed. Creation succeeded and a second login no
+  longer asked to create the account. The original client downloaded to 64%, then
+  showed WARNING: Disconnected from server. It did NOT complete arena loading.
+  The earlier relay deadline interrupted a preliminary attempt; the second relay
+  was still active when the original client displayed the disconnect. This is not
+  a clean native-Windows control (Wine and SSH/UDP relay add variables), so it does
+  not prove an account restriction or explain AIContinuum's sub-second disconnect.
+  Closed the original client, stopped the relay, restored prior profile/zone files,
+  and removed the temporary plaintext password file. Account creation persists.
