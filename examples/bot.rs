@@ -2,7 +2,9 @@
 //! Usage: cargo run --example bot -- 127.0.0.1:5000 [name] [seconds] [ship] [modes]
 //!   modes: comma-separated; fire = hold the gun, still = sit still (a target),
 //!          chat = say something in public chat every 3 seconds,
-//!          chase:NAME = steer toward player NAME, keep ~10 tiles away and fire when lined up
+//!          chase:NAME = steer toward player NAME, keep ~10 tiles away and fire when lined up,
+//!          dist:N = chase distance in tiles (default 10),
+//!          freq:N = switch to team N after getting a ship
 
 use std::time::{Duration, Instant};
 
@@ -39,6 +41,10 @@ fn main() {
     };
     let chat = modes.contains(&"chat");
     let chase = modes.iter().find_map(|m| m.strip_prefix("chase:")).map(str::to_string);
+    let freq: Option<u16> = modes.iter().find_map(|m| m.strip_prefix("freq:")).and_then(|f| f.parse().ok());
+    let mut freq_sent = false;
+    let dist: f32 = modes.iter().find_map(|m| m.strip_prefix("dist:")).and_then(|d| d.parse().ok()).unwrap_or(10.0);
+    let mut next_report = Instant::now() + Duration::from_secs(2);
     let mut next_chat = Instant::now() + Duration::from_secs(3);
     let mut said = 0u32;
     while Instant::now() < end {
@@ -52,7 +58,17 @@ fn main() {
             game.request_ship(ship_type);
             println!("{name}: in arena, requesting ship {ship_type}");
         }
-        let input = match (&chase, chase_input(&game, chase.as_deref())) {
+        if let (Some(f), false, true) = (freq, freq_sent, game.ship.is_some()) {
+            freq_sent = true;
+            if let Some(s) = game.session.as_mut() {
+                s.request_freq(f);
+            }
+        }
+        if let (Some(target), true) = (&chase, Instant::now() >= next_report) {
+            next_report += Duration::from_secs(2);
+            report_chase(&game, target);
+        }
+        let input = match (&chase, chase_input(&game, chase.as_deref(), dist)) {
             (Some(_), Some(i)) => i,
             (Some(_), None) => Input::default(),
             _ => input,
@@ -83,23 +99,40 @@ fn main() {
     }
 }
 
+/// One status line for chase mode: where we and the target are.
+fn report_chase(game: &Game, target: &str) {
+    let Some(s) = game.session.as_ref() else { return };
+    let me = game.ship.as_ref().map(|m| (m.position.x as i32, m.position.y as i32));
+    match s.players.values().find(|p| p.name == target) {
+        Some(t) => println!(
+            "chase: me {me:?} target ship {} dead {} updates {} at ({}, {})",
+            t.ship, t.dead, t.position_updates, t.position.x as i32, t.position.y as i32
+        ),
+        None => println!("chase: me {me:?}, no player named {target}"),
+    }
+}
+
 /// Steering toward a named player: turn to face them, thrust when far, back off when close,
 /// and fire when roughly lined up.
-fn chase_input(game: &Game, target: Option<&str>) -> Option<Input> {
+fn chase_input(game: &Game, target: Option<&str>, keep: f32) -> Option<Input> {
     let target = target?;
     let ship = game.ship.as_ref()?;
     let s = game.session.as_ref()?;
     let t = s.players.values().find(|p| p.name == target && p.ship < 8 && !p.dead && p.position_updates > 0)?;
     let (dx, dy) = (t.position.x - ship.position.x, t.position.y - ship.position.y);
     let dist = (dx * dx + dy * dy).sqrt();
+    // Guns don't fire in a safe zone: close in until we're out of it.
+    let in_safe = game.world().is_some_and(|(map, _)| {
+        map.tile(ship.position.x as i32, ship.position.y as i32) == aicontinuum::lvl::TILE_SAFE
+    });
     // Orientation 0 = up, increasing clockwise, in turns.
     let want = (dx.atan2(-dy) / std::f32::consts::TAU).rem_euclid(1.0);
     let diff = (want - ship.orientation + 1.5).rem_euclid(1.0) - 0.5;
     Some(Input {
         right: diff > 0.01,
         left: diff < -0.01,
-        forward: dist > 12.0,
-        backward: dist < 7.0,
+        forward: dist > keep + 2.0 || (in_safe && dist > 2.0),
+        backward: dist < keep - 3.0,
         gun: diff.abs() < 0.04 && dist < 30.0,
         ..Default::default()
     })

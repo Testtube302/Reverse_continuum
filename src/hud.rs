@@ -148,10 +148,11 @@ impl Hud {
         }
         self.radar(game, sw, sh);
         self.chat(game, sw, sh);
-        // Centre message area: arena enter/leave lines at (sw/6, sh*0.6), newest at the bottom.
+        // Centre message area: arena enter/leave lines (blue) and kills (yellow) at (sw/6, sh*0.6), newest at the bottom.
         let (cx, cy) = ((sw / 6.0).floor(), (sh * 0.6).floor());
-        for (i, (text, _)) in game.center_messages.iter().enumerate() {
-            self.text(text, TextColor::Blue, cx, cy + i as f32 * FONT_H);
+        for (i, m) in game.center_messages.iter().enumerate() {
+            let color = if m.kill { TextColor::Yellow } else { TextColor::Blue };
+            self.text(&m.text, color, cx, cy + i as f32 * FONT_H);
         }
     }
 
@@ -429,15 +430,28 @@ impl Hud {
         self.text(&format!("{name}({bounty})[{ping_ms}]"), color, center.0 + 14.0, center.1 + 14.0);
         if let Some((energy, initial)) = energy {
             let text = energy.to_string();
-            let color = if (energy as u32) * 4 < initial {
-                TextColor::DarkRed
-            } else if (energy as u32) * 2 < initial {
-                TextColor::Yellow
-            } else {
-                TextColor::Blue
-            };
+            let color = energy_color(energy as u32, initial).unwrap_or(TextColor::Blue);
             self.text(&text, color, center.0 - 22.0 - text.len() as f32 * FONT_W, center.1 + 14.0);
         }
+    }
+
+    /// Our own ship's energy, 14 px right/down of its centre, only while below half
+    /// (measured from the original: yellow below 1/2, dark red below 1/4).
+    pub fn own_energy_label(&self, energy: u32, max_energy: u32, center: (f32, f32)) {
+        if let Some(color) = energy_color(energy, max_energy) {
+            self.text(&energy.to_string(), color, center.0 + 14.0, center.1 + 14.0);
+        }
+    }
+}
+
+/// Low-energy warning colour: dark red below a quarter, yellow below half, else none.
+fn energy_color(energy: u32, full: u32) -> Option<TextColor> {
+    if energy * 4 < full {
+        Some(TextColor::DarkRed)
+    } else if energy * 2 < full {
+        Some(TextColor::Yellow)
+    } else {
+        None
     }
 }
 

@@ -114,13 +114,20 @@ pub struct RemoteFire {
     pub catch_up: u32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Death {
     pub killer: u16,
     pub killed: u16,
     pub bounty: u16,
     /// Prize left where the victim died (0 = none).
     pub green: i8,
+    /// The victim and killer as they were when the packet arrived: a ship change or departure
+    /// handled later in the same frame must not change the explosion or the kill message.
+    pub victim_name: String,
+    pub victim_ship: u8,
+    pub victim_position: Vec2,
+    pub victim_velocity: Vec2,
+    pub killer_name: String,
 }
 
 /// A flag on the map (or carried, when `dropped` is false).
@@ -521,8 +528,20 @@ impl Session {
                         pl.dead = true;
                     }
                     let name = |pid| self.players.get(&pid).map(|p| p.name.clone()).unwrap_or_default();
-                    self.note(format!("{} killed by {} ({bounty})", name(killed), name(killer)));
-                    self.deaths.push(Death { killer, killed, bounty, green: p[1] as i8 });
+                    let (victim_name, killer_name) = (name(killed), name(killer));
+                    self.note(format!("{victim_name} killed by {killer_name} ({bounty})"));
+                    let victim = self.players.get(&killed);
+                    self.deaths.push(Death {
+                        killer,
+                        killed,
+                        bounty,
+                        green: p[1] as i8,
+                        victim_name,
+                        victim_ship: victim.map_or(SPECTATOR, |v| v.ship),
+                        victim_position: victim.map_or_else(Vec2::default, |v| v.position),
+                        victim_velocity: victim.map_or_else(Vec2::default, |v| v.velocity),
+                        killer_name,
+                    });
                 }
             }
             0x07 => {

@@ -11,8 +11,16 @@ use crate::settings::ArenaSettings;
 use crate::sim::{self, Input, Ship, Vec2};
 use crate::weapons::{ExplosionKind, Shooter, Target, WeaponData, WeaponEvent, WeaponKind, Weapons, damage_to_local};
 
-/// Ticks a ship explosion is shown (explode1 animation, 0.8 s).
-pub const SHIP_EXPLOSION_TICKS: u32 = 80;
+/// Ticks a ship explosion is shown: explode1's 34 frames at ~28 ms each, measured from the
+/// original (visible 957-985 ms).
+pub const SHIP_EXPLOSION_TICKS: u32 = 96;
+/// Ticks from a death to the respawn: EnterDelay plus this (measured 3.03 s with EnterDelay=200).
+pub const RESPAWN_EXTRA_TICKS: u32 = 100;
+/// The warp-in flash over a respawning ship: warp.png's 16 frames, measured ~410-425 ms.
+pub const WARP_TICKS: u32 = 42;
+/// Ship debris: one piece per row of the ship's junk sheet, flying outward and tumbling.
+pub const DEBRIS_PIECES: u8 = 9;
+pub const DEBRIS_TICKS: u32 = 300;
 pub const BULLET_EXPLOSION_TICKS: u32 = 40;
 pub const BOMB_EXPLOSION_TICKS: u32 = 125;
 /// How long centre-screen messages stay up (measured from the original: ~4 s).
@@ -24,6 +32,7 @@ pub enum EffectKind {
     Bomb,
     EmpBomb,
     ShipExplosion,
+    Warp,
 }
 
 impl EffectKind {
@@ -32,6 +41,7 @@ impl EffectKind {
             Self::BulletHit => BULLET_EXPLOSION_TICKS,
             Self::Bomb | Self::EmpBomb => BOMB_EXPLOSION_TICKS,
             Self::ShipExplosion => SHIP_EXPLOSION_TICKS,
+            Self::Warp => WARP_TICKS,
         }
     }
 }
@@ -40,6 +50,35 @@ impl EffectKind {
 pub struct Effect {
     pub kind: EffectKind,
     pub position: Vec2,
+    pub age: u32,
+}
+
+/// A tumbling piece of a destroyed ship (`junk<ship>.png` row `piece`).
+#[derive(Clone, Copy, Debug)]
+pub struct Debris {
+    pub ship: u8,
+    pub piece: u8,
+    pub position: Vec2,
+    /// Tiles per tick.
+    pub velocity: Vec2,
+    pub age: u32,
+    /// Rotation frame (0..10) at age 0, and ticks per frame (negative = turning the other way).
+    pub frame0: u8,
+    pub spin: i32,
+}
+
+impl Debris {
+    pub fn frame(&self) -> u32 {
+        let steps = self.age as i32 / self.spin.abs().max(1) * self.spin.signum();
+        (self.frame0 as i32 + steps).rem_euclid(10) as u32
+    }
+}
+
+/// A centre-screen message: arena enter/leave lines and kill messages.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CenterMessage {
+    pub text: String,
+    pub kill: bool,
     pub age: u32,
 }
 
@@ -61,6 +100,7 @@ pub struct Game {
     flag_ticks: u32,
     flag_requests: std::collections::HashMap<u16, u32>,
     pub effects: Vec<Effect>,
+    pub debris: Vec<Debris>,
     pub sounds: Vec<SoundCue>,
     pub notices: Vec<String>,
     /// Spectator camera when not in a ship.
@@ -71,8 +111,7 @@ pub struct Game {
     seen_door_generation: u32,
     followed_pid: Option<u16>,
     follow_released: bool,
-    /// Centre-screen messages and their age in frames.
-    pub center_messages: Vec<(String, u32)>,
+    pub center_messages: Vec<CenterMessage>,
     pub deaths: u32,
     rng: u32,
 }
@@ -105,6 +144,7 @@ impl Game {
             flag_ticks: 0,
             flag_requests: std::collections::HashMap::new(),
             effects: Vec::new(),
+            debris: Vec::new(),
             sounds: Vec::new(),
             notices: Vec::new(),
             // Spectators start at the map's top-left corner, as in the original.
@@ -206,7 +246,7 @@ impl Game {
         }
         let Some(s) = self.session.as_mut() else { return };
         for m in s.arena_messages.drain(..) {
-            self.center_messages.push((m, 0));
+            self.center_messages.push(CenterMessage { text: m, kill: false, age: 0 });
         }
         if self.ship.is_none() {
             if let Some(name) = &self.follow {
@@ -287,7 +327,9 @@ impl Game {
             if self.dead_ticks == 0 {
                 let seed = self.random(u32::MAX);
                 if let Some(kind) = self.ship.as_ref().map(|s| s.ship) {
-                    self.ship = Some(fresh_ship(&map, &settings, kind, seed, seed.rotate_left(13) ^ 0xA5A5_5A5A));
+                    let ship = fresh_ship(&map, &settings, kind, seed, seed.rotate_left(13) ^ 0xA5A5_5A5A);
+                    self.effects.push(Effect { kind: EffectKind::Warp, position: ship.position, age: 0 });
+                    self.ship = Some(ship);
                 }
             }
         } else if let Some(ship) = self.ship.as_mut() {
@@ -345,15 +387,19 @@ impl Game {
             self.handle_events(events, &map, &settings);
         }
         for d in deaths {
+            let text = format!("{}({}) killed by: {}", d.victim_name, d.bounty, d.killer_name);
+            self.center_messages.push(CenterMessage { text, kill: true, age: 0 });
             if d.killed == local {
                 continue; // We already showed our own explosion.
             }
-            if let Some(p) = self.session.as_ref().and_then(|s| s.players.get(&d.killed)) {
-                self.effects.push(Effect { kind: EffectKind::ShipExplosion, position: p.position, age: 0 });
-                self.sounds.push(SoundCue { name: "explode1".into(), position: p.position });
+            if d.victim_ship < 8 {
+                let (pos, vel) = (d.victim_position, d.victim_velocity);
+                self.spawn_debris(d.victim_ship, pos, vel);
+                self.effects.push(Effect { kind: EffectKind::ShipExplosion, position: pos, age: 0 });
+                self.sounds.push(SoundCue { name: "explode1".into(), position: pos });
                 // Only moving victims drop their prize.
-                if d.green > 0 && (p.velocity.x != 0.0 || p.velocity.y != 0.0) {
-                    self.greens.add_death_green(p.position, d.green as i16, &settings);
+                if d.green > 0 && (vel.x != 0.0 || vel.y != 0.0) {
+                    self.greens.add_death_green(pos, d.green as i16, &settings);
                 }
             }
             self.weapons.clear_owner(d.killed);
@@ -378,11 +424,38 @@ impl Game {
             e.age += 1;
         }
         self.effects.retain(|e| e.age < e.kind.duration());
-        for m in &mut self.center_messages {
-            m.1 += 1;
+        for d in &mut self.debris {
+            d.position.x += d.velocity.x;
+            d.position.y += d.velocity.y;
+            d.age += 1;
         }
-        self.center_messages.retain(|m| m.1 < CENTER_MESSAGE_TICKS);
+        self.debris.retain(|d| d.age < DEBRIS_TICKS);
+        for m in &mut self.center_messages {
+            m.age += 1;
+        }
+        self.center_messages.retain(|m| m.age < CENTER_MESSAGE_TICKS);
         fired
+    }
+
+    /// Breaks a ship into tumbling pieces flying outward at 6-14 tiles/s (measured from the
+    /// original), carried along with the ship's own velocity.
+    fn spawn_debris(&mut self, ship: u8, position: Vec2, velocity: Vec2) {
+        for piece in 0..DEBRIS_PIECES {
+            let angle = self.random(3600) as f32 / 3600.0 * std::f32::consts::TAU;
+            let speed = (6.0 + self.random(800) as f32 / 100.0) / 100.0;
+            let spin = 3 + self.random(6) as i32;
+            let frame0 = self.random(10) as u8;
+            let spin = if self.random(2) == 0 { spin } else { -spin };
+            self.debris.push(Debris {
+                ship,
+                piece,
+                position,
+                velocity: Vec2::new(velocity.x / 100.0 + angle.cos() * speed, velocity.y / 100.0 + angle.sin() * speed),
+                age: 0,
+                frame0,
+                spin,
+            });
+        }
     }
 
     fn tick_prizes(&mut self, map: &Map, settings: &ArenaSettings) {
@@ -557,11 +630,12 @@ impl Game {
                 ship.energy = 1.0; // Your own bomb never kills you.
                 return;
             }
-            let (pos, bounty) = (ship.position, ship.bounty);
+            let (pos, vel, kind, bounty) = (ship.position, ship.velocity, ship.ship, ship.bounty);
             ship.energy = 0.0;
             ship.velocity = Vec2::default();
             self.deaths += 1;
-            self.dead_ticks = settings.enter_delay + SHIP_EXPLOSION_TICKS;
+            self.dead_ticks = settings.enter_delay + RESPAWN_EXTRA_TICKS;
+            self.spawn_debris(kind, pos, vel);
             self.effects.push(Effect { kind: EffectKind::ShipExplosion, position: pos, age: 0 });
             self.sounds.push(SoundCue { name: "explode1".into(), position: pos });
             self.weapons.clear_owner(local);

@@ -59,7 +59,23 @@
       <1/4 of InitialEnergy. --follow: spectate request (0x08) only until the target's first
       position, then cancel (0xFFFF) — SS.NET relays only the spectated player otherwise.
       examples/bot chase:NAME steers at a player and fires. AIC_DEBUG_PLAYERS=1 dumps players.
-      TODO:, name-tag toggles, LED rows 1-2 meaning (currently 0),
+      Round 7 (ship deaths, measured with tools/ref-rig/ring.sh rolling captures at ~14 ms/frame
+      and match_anim.py): explode1 = 34 frames x ~28 ms (visible 957-985 ms; we use 96 ticks),
+      centred exactly on the ship. Debris: one piece per row of junk<ship>.png (9 rows x 10
+      rotations), 6-14 tiles/s outward, ~8-9 seen. Own death: camera stays at the death spot;
+      respawn EnterDelay + ~100 ticks later (measured 3.03 s with EnterDelay=200) with warp.png
+      (16 frames, ~410-425 ms) centred on the new ship, drawn over it. Kill message
+      "victim(bounty) killed by: killer" in Yellow in the centre-message stack (0 px diff).
+      Own ship's energy at centre +14,+14 only below 1/2 (Yellow) / 1/4 (DarkRed), verified.
+      Death packets snapshot the victim (ship/pos/name) — a spec move in the same frame gave
+      shark debris. SS.NET specs players for "too many deaths without firing" (the original
+      then drops its explosion and its view jumps). Sheets now ignore trailing blank cells.
+      Bot: chase:NAME,freq:N,dist:N; leaves safe zones before firing.
+      Seen, not done yet: "Safety Time Left: 0:10:52" (yellow, above-right of the ship while in
+      a safe zone after spawning); a spectator not following anyone saw an enemy's label in
+      yellow with energy; bullet-hit explode0 ~62-70 ms/frame in the original vs our 57 —
+      re-measure with single shots before changing.
+      TODO: name-tag toggles, LED rows 1-2 meaning (currently 0),
       bg sparkle objects (bg01-14), door animation, flags, LVZ, in-ship full-screen diff with
       matched state (original's ship had multiprize upgrades), Windows clock offset (uses `date`).
 
@@ -98,7 +114,8 @@
 - Rig helpers: tools/ref-rig/rx.sh (run in container, optional screenshot → ~/aicontinuum-ref/shots;
   C=aic-wine5 to target the original's container) and crop.sh. Start: `docker start aic-ref aic-wine5`,
   clear /tmp/.X99-lock, start Xvfb :99 x16, zone-restart.sh, then join5.sh in aic-wine5.
-- Next round planned: weapons/explosions comparison OUTSIDE the safe zone (bot chase:Name).
+- Next round planned: bullet-hit/bomb explosion timing with single shots, safety timer, bomb
+  trails (trail.png) and exhaust (exhaust.png).
 
 ## Original Continuum under Wine
 - Installed copy: ~/.wine-aicontinuum/drive_c/Continuum (zone.dat has "AIC Local,127.0.0.1,5000"

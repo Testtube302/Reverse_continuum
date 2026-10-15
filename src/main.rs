@@ -124,6 +124,8 @@ struct Sheet {
     frame_w: f32,
     frame_h: f32,
     columns: u32,
+    /// Frames up to the last one with any visible pixel (sheets can end in blank cells).
+    frames: u32,
 }
 
 impl Sheet {
@@ -131,11 +133,20 @@ impl Sheet {
         let img = assets.graphic(name).unwrap_or_else(|e| die(e));
         let tex = Texture2D::from_rgba8(img.width as u16, img.height as u16, &img.pixels);
         tex.set_filter(FilterMode::Nearest);
-        Self { tex, frame_w: frame_w as f32, frame_h: frame_h as f32, columns: (img.width / frame_w).max(1) }
+        let columns = (img.width / frame_w).max(1);
+        let cells = columns * (img.height / frame_h);
+        let visible = |f: u32| {
+            let (x0, y0) = ((f % columns) * frame_w, (f / columns) * frame_h);
+            (y0..y0 + frame_h).any(|y| {
+                (x0..x0 + frame_w).any(|x| img.pixels[((y * img.width + x) * 4 + 3) as usize] != 0)
+            })
+        };
+        let frames = (0..cells).rev().find(|&f| visible(f)).map_or(cells, |f| f + 1);
+        Self { tex, frame_w: frame_w as f32, frame_h: frame_h as f32, columns, frames }
     }
 
     fn frame_count(&self) -> u32 {
-        self.columns * (self.tex.height() / self.frame_h) as u32
+        self.frames
     }
 
     /// Draws `frame` centred on the screen point (x, y).
@@ -164,6 +175,9 @@ struct Graphics {
     explode1: Sheet,
     explode2: Sheet,
     empburst: Sheet,
+    warp: Sheet,
+    /// Ship debris, one sheet per ship type: 9 pieces (rows) x 10 rotations.
+    junk: Vec<Sheet>,
     prizes: Sheet,
     flags: Sheet,
     goal: Sheet,
@@ -186,6 +200,11 @@ impl Graphics {
             explode1: Sheet::load(assets, "explode1", 48, 48),
             explode2: Sheet::load(assets, "explode2", 80, 80),
             empburst: Sheet::load(assets, "empburst", 80, 80),
+            warp: Sheet::load(assets, "warp", 48, 48),
+            junk: ["wb", "jv", "sp", "lv", "te", "we", "nw", "sh"]
+                .iter()
+                .map(|s| Sheet::load(assets, &format!("junk{s}"), 16, 16))
+                .collect(),
             prizes: Sheet::load(assets, "prizes", 16, 16),
             flags: Sheet::load(assets, "flag", 16, 16),
             goal: Sheet::load(assets, "goal", 16, 16),
@@ -674,6 +693,7 @@ fn draw_world(game: &Game, tiles: &Tiles, gfx: &Graphics, hud: &mut hud::Hud) {
     if let (Some(ship), true) = (&game.ship, game.alive()) {
         let (x, y) = to_screen(ship.position);
         gfx.ships.draw_centered(ship.ship as u32 * 40 + ship.direction() as u32, x, y);
+        hud.own_energy_label(ship.energy as u32, ship.max_energy, (x, y));
     }
 
     for (tx, ty) in visible_tiles() {
@@ -683,6 +703,11 @@ fn draw_world(game: &Game, tiles: &Tiles, gfx: &Graphics, hud: &mut hud::Hud) {
         }
     }
 
+    for d in &game.debris {
+        let (x, y) = to_screen(d.position);
+        gfx.junk[d.ship.min(7) as usize].draw_centered(d.piece as u32 * 10 + d.frame(), x, y);
+    }
+
     for e in &game.effects {
         let (x, y) = to_screen(e.position);
         let sheet = match e.kind {
@@ -690,6 +715,7 @@ fn draw_world(game: &Game, tiles: &Tiles, gfx: &Graphics, hud: &mut hud::Hud) {
             EffectKind::Bomb => &gfx.explode2,
             EffectKind::EmpBomb => &gfx.empburst,
             EffectKind::ShipExplosion => &gfx.explode1,
+            EffectKind::Warp => &gfx.warp,
         };
         let n = sheet.frame_count();
         sheet.draw_centered((e.age * n / e.kind.duration()).min(n - 1), x, y);

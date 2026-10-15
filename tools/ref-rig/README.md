@@ -31,3 +31,8 @@ Compare a region (both quantised to the 16-bit display):
 
 Matched so far at 1024×768 (0 differing pixels): Esc menu, radar frame + sector grid, chat line,
 spectator X-radar icon; status panel / icon columns / energy bar positions verified.
+
+Animation timing: `ring.sh` (copy into a container, run with `setsid`, `touch /work/stop` to end)
+keeps the last ~8 s of 400×400 centre captures named by nanosecond timestamp (~14 ms apart for the
+original). Convert to PNG, fetch, then `match_anim.py SHEET FW FH DIR [cx cy search]` prints the
+best-matching sprite frame per capture, from which per-frame durations come out by regression.
