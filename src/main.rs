@@ -499,6 +499,17 @@ async fn main() {
         if !typing && !menu_open && is_key_pressed(KeyCode::S) && !is_key_down(KeyCode::Tab) {
             game.request_ship(SPECTATOR);
         }
+        if !typing && !menu_open {
+            // Home stealth, Shift+Home cloak, End X-radar, Shift+End antiwarp (Continuum defaults).
+            let shift = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
+            use aicontinuum::sim::{STATUS_ANTIWARP, STATUS_CLOAK, STATUS_STEALTH, STATUS_XRADAR};
+            if is_key_pressed(KeyCode::Home) {
+                game.toggle_status(if shift { STATUS_CLOAK } else { STATUS_STEALTH });
+            }
+            if is_key_pressed(KeyCode::End) {
+                game.toggle_status(if shift { STATUS_ANTIWARP } else { STATUS_XRADAR });
+            }
+        }
         if !typing && !menu_open && is_key_pressed(KeyCode::F7) {
             game.request_attach();
         }
@@ -771,6 +782,11 @@ fn draw_world(game: &Game, tiles: &Tiles, gfx: &Graphics, hud: &mut hud::Hud) {
         let now = aicontinuum::net::transport::now_tick();
         for p in s.players.values() {
             if Some(p.pid) == s.pid || p.ship >= 8 || p.dead || p.position_updates == 0 {
+                continue;
+            }
+            // Cloaked enemies stay hidden unless we have X-radar on.
+            let cloaked = p.status & aicontinuum::sim::STATUS_CLOAK != 0;
+            if cloaked && view_freq != Some(p.freq) && !game.xradar_on() {
                 continue;
             }
             let (x, y) = to_screen(p.position);

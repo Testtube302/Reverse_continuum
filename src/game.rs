@@ -192,6 +192,8 @@ pub struct Game {
     pub dead_ticks: u32,
     /// Ticks our ship has spent in a safe zone since it last entered one (0 = outside).
     pub safe_ticks: u32,
+    /// A spectator's X-radar toggle (End).
+    pub spectator_xradar: bool,
     /// Ticks since our last flag pickup while we carry flags, and the count then.
     flag_carry: (u32, u16),
     pub weapons: Weapons,
@@ -243,6 +245,7 @@ impl Game {
             ship: None,
             dead_ticks: 0,
             safe_ticks: 0,
+            spectator_xradar: false,
             flag_carry: (0, 0),
             weapons: Weapons::default(),
             greens: Greens::default(),
@@ -523,7 +526,15 @@ impl Game {
             // The safety clock restarts from SafetyLimit on every entry (measured).
             self.safe_ticks = if in_safe { self.safe_ticks + 1 } else { 0 };
             let old_pos = ship.position;
-            let used = ship.use_utilities(input, &settings, in_safe);
+            let at = ship.position;
+            let antiwarper = self.antiwarped_by(at, &settings);
+            let ship = self.ship.as_mut().unwrap();
+            let used = ship.use_utilities(input, &settings, in_safe, antiwarper.is_some());
+            if let (true, Some(name)) = (used.antiwarped, &antiwarper) {
+                let text = format!("AntiWarp engaged by: {name}");
+                self.center_messages.push(CenterMessage { text, yellow: true, age: 0 });
+            }
+            let ship = self.ship.as_mut().unwrap();
             let (pos, kind) = (ship.position, ship.ship);
             self.apply_utilities(used, old_pos, pos, kind, &map, &settings);
             let ship = self.ship.as_mut().unwrap();
@@ -688,6 +699,52 @@ impl Game {
                 frame0,
                 spin,
             });
+        }
+    }
+
+    /// The enemy whose antiwarp field covers `at`, if any (AntiWarpPixels radius).
+    fn antiwarped_by(&self, at: Vec2, settings: &ArenaSettings) -> Option<String> {
+        let s = self.session.as_ref()?;
+        let my_freq = s.me()?.freq;
+        let r = settings.antiwarp_pixels as f32 / 16.0;
+        s.players
+            .values()
+            .filter(|p| Some(p.pid) != s.pid && p.ship < 8 && !p.dead && p.freq != my_freq)
+            .filter(|p| p.status & sim::STATUS_ANTIWARP != 0)
+            .find(|p| p.position.sub(at).length() <= r)
+            .map(|p| p.name.clone())
+    }
+
+    /// Home / Shift+Home / End / Shift+End: flips stealth, cloak, X-radar or antiwarp when our
+    /// ship has it, with its sound ("off" when switching off). Spectators can flip X-radar.
+    pub fn toggle_status(&mut self, bit: u8) {
+        let pos = self.ship.as_ref().map(|s| s.position).unwrap_or(self.camera);
+        let alive = self.dead_ticks == 0;
+        let on = match self.ship.as_mut() {
+            Some(ship) if alive => ship.toggle(bit),
+            Some(_) => None,
+            None if bit == sim::STATUS_XRADAR => {
+                self.spectator_xradar = !self.spectator_xradar;
+                Some(self.spectator_xradar)
+            }
+            None => None,
+        };
+        let name = match (on, bit) {
+            (None, _) => return,
+            (Some(false), _) => "off",
+            (Some(true), sim::STATUS_STEALTH) => "stealth",
+            (Some(true), sim::STATUS_CLOAK) => "cloak",
+            (Some(true), sim::STATUS_XRADAR) => "xradar",
+            (Some(true), _) => "antiwarp",
+        };
+        self.sounds.push(SoundCue { name: name.into(), position: pos });
+    }
+
+    /// Whether we see through cloaks and stealth (our X-radar, or a spectator's).
+    pub fn xradar_on(&self) -> bool {
+        match &self.ship {
+            Some(s) => s.status & sim::STATUS_XRADAR != 0,
+            None => self.spectator_xradar,
         }
     }
 
@@ -937,6 +994,15 @@ impl Game {
         let camera = self.camera;
         if let Some(s) = self.session.as_mut() {
             s.spectate_at = camera;
+            if let Some(ship) = self.ship.as_mut() {
+                s.status_bits = ship.status & 0x0F;
+                if ship.status & sim::STATUS_FLASH != 0 {
+                    ship.status &= !sim::STATUS_FLASH;
+                    s.pending_status |= sim::STATUS_FLASH;
+                }
+            } else {
+                s.status_bits = if self.spectator_xradar { sim::STATUS_XRADAR } else { 0 };
+            }
             s.send_position(self.ship.as_ref(), fired, dead, false);
         }
     }

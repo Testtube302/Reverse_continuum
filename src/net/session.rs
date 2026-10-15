@@ -90,6 +90,8 @@ pub struct Player {
     pub position: Vec2,
     pub velocity: Vec2,
     pub direction: u8,
+    /// Stealth/cloak/X-radar/antiwarp/flash bits from their last position packet.
+    pub status: u8,
     pub bounty: u16,
     pub energy: u16,
     /// Latency in 10 ms units, as relayed in position packets.
@@ -182,6 +184,8 @@ pub struct Session {
     pub arena_messages: Vec<String>,
     /// Status bits to send with our next position (0x10 = warp flash), then cleared.
     pub pending_status: u8,
+    /// Our stealth/cloak/X-radar/antiwarp bits, sent with every position.
+    pub status_bits: u8,
     /// Players seen warping (their position packet had the flash bit), to animate.
     pub warp_flashes: Vec<Vec2>,
     /// Bricks standing on the map: (tile x, tile y, team, local tick they expire).
@@ -219,6 +223,7 @@ impl Session {
             door_generation: 0,
             arena_messages: Vec::new(),
             pending_status: 0,
+            status_bits: 0,
             warp_flashes: Vec::new(),
             bricks: Vec::new(),
             log: Vec::new(),
@@ -507,7 +512,7 @@ impl Session {
         p.extend_from_slice(&vx.to_le_bytes());
         p.extend_from_slice(&y.to_le_bytes());
         p.push(0); // checksum, filled below
-        p.push(std::mem::take(&mut self.pending_status)); // status flags (0x10 = warp flash)
+        p.push(self.status_bits | std::mem::take(&mut self.pending_status)); // status (0x10 = flash)
         p.extend_from_slice(&x.to_le_bytes());
         p.extend_from_slice(&vy.to_le_bytes());
         p.extend_from_slice(&bounty.to_le_bytes());
@@ -552,6 +557,7 @@ impl Session {
                         position: Vec2::default(),
                         velocity: Vec2::default(),
                         direction: 0,
+                        status: 0,
                         bounty: 0,
                         energy: 0,
                         ping: 0,
@@ -803,6 +809,7 @@ impl Session {
         pl.dead = false;
         pl.direction = p[1];
         pl.position = Vec2::new(u16_at(p, 4).unwrap() as f32 / 16.0, u16_at(p, 15).unwrap() as f32 / 16.0);
+        pl.status = p.get(13).copied().unwrap_or(0);
         if p.get(13).is_some_and(|st| st & 0x10 != 0) {
             self.warp_flashes.push(pl.position);
         }
@@ -830,6 +837,7 @@ impl Session {
         pl.bounty = p[7] as u16;
         pl.ping = p[6];
         pl.position = Vec2::new(u16_at(p, 4).unwrap() as f32 / 16.0, u16_at(p, 12).unwrap() as f32 / 16.0);
+        pl.status = p.get(9).copied().unwrap_or(0);
         if p.get(9).is_some_and(|st| st & 0x10 != 0) {
             self.warp_flashes.push(pl.position);
         }

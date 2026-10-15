@@ -51,7 +51,18 @@
       0x28 @9) play the warp animation — seen working in our client when the original warped.
       TODO: teammates pass through their own bricks; enemy brick on top of us -> respawn;
       antiwarp blocks portal/warp; remote rocket exhaust (not in packets).
-      NOT yet: stealth/
+      Round 15: stealth (Home), cloak (Shift+Home), X-radar (End), antiwarp (Shift+End). Status
+      bits 1/2/4/8 (+0x10 flash) in position packets both ways. Toggles need the ability, cost
+      Stealth/Cloak/XRadar/AntiWarpEnergy (ship +34/+32/+38/+36) per 10 s and switch off when
+      unaffordable; firing outside safe drops cloak with a flash; uncloaking flashes. Enemy
+      cloak hides ship+label, enemy stealth hides the radar dot, unless our X-radar is on
+      (spectators can toggle X-radar). Enemy antiwarp within AntiWarpPixels (@1308) blocks
+      portal/warp: "AntiWarp engaged by: NAME" (yellow centre message). Verified vs the original
+      on the rig: its cloak hid it in our view, our X-radar revealed it, its antiwarp refused our
+      warp, and the right icon column with all four on matches (4 px = stars). The original
+      draws its own cloaked ship normally. Rig arena: [Warbird] Stealth/Cloak/XRadar/AntiWarp
+      Status=2. tools/ref-rig/shot2.sh grabs both screens at once.
+      NOT yet: 
       cloak/xradar/antiwarp effects, EMP shutdown, arena spawn settings, attach/turrets,
       flags/balls, score packets.
 - [x] M4 UI (look-matching done 2026-10-15, leftovers listed in round 12): hud.rs + main.rs draw the HUD, radar, chat, Esc menu, map objects,
@@ -196,7 +207,7 @@
 - Rig helpers: tools/ref-rig/rx.sh (run in container, optional screenshot → ~/aicontinuum-ref/shots;
   C=aic-wine5 to target the original's container) and crop.sh. Start: `docker start aic-ref aic-wine5`,
   clear /tmp/.X99-lock, start Xvfb :99 x16, zone-restart.sh, then join5.sh in aic-wine5.
-- Next: stealth/cloak/xradar/antiwarp, EMP shutdown, attach/turrets, balls, scores.
+- Next: EMP shutdown, attach/turrets, balls, scores.
 - Rig arena gives Warbirds 2 of every item (InitialRepel..InitialPortal).
 - The rig's centre safe zone has wall pieces: bots chasing the original get stuck behind them.
   Move the original into open space first (Up 1.2 s, wait, Down 1.2 s).

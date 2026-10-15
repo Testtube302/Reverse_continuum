@@ -154,7 +154,8 @@ impl Hud {
             self.indicators(ship, sw, sh);
         } else if game.ship.is_none() {
             // Spectators get only the X-radar indicator (slot 4 of the right column).
-            self.icon(37, sw - 26.0, (sh / 2.0).floor() - 48.0 + 4.0 * 25.0);
+            let icon = if game.xradar_on() { 36 } else { 37 };
+            self.icon(icon, sw - 26.0, (sh / 2.0).floor() - 48.0 + 4.0 * 25.0);
         }
         if let Some(secs) = game.flag_drop_seconds() {
             // Animated flag icon at (sw-16, 109) with the seconds left in dark red to its left
@@ -271,8 +272,15 @@ impl Hud {
             };
             start + ship.bombs - 1
         });
-        // Toggle states aren't implemented yet, so abilities show as available-but-off.
-        let abilities = [ship.caps.stealth.then_some(33), ship.caps.cloak.then_some(35), ship.caps.xradar.then_some(37), ship.caps.antiwarp.then_some(39)];
+        // Abilities: icon 32/34/36/38 while on, the next one while available but off.
+        use aicontinuum::sim::{STATUS_ANTIWARP, STATUS_CLOAK, STATUS_STEALTH, STATUS_XRADAR};
+        let state = |cap: bool, bit: u8, on: u32| cap.then_some(if ship.status & bit != 0 { on } else { on + 1 });
+        let abilities = [
+            state(ship.caps.stealth, STATUS_STEALTH, 32),
+            state(ship.caps.cloak, STATUS_CLOAK, 34),
+            state(ship.caps.xradar, STATUS_XRADAR, 36),
+            state(ship.caps.antiwarp, STATUS_ANTIWARP, 38),
+        ];
         for (i, icon) in [gun, bomb].into_iter().chain(abilities).enumerate() {
             let y = top + i as f32 * 25.0;
             match icon {
@@ -389,6 +397,11 @@ impl Hud {
             let my_freq = s.me().map(|m| m.freq);
             for p in s.players.values() {
                 if Some(p.pid) == s.pid || p.ship >= 8 || p.dead || p.position_updates == 0 {
+                    continue;
+                }
+                // Stealthed enemies are off the radar unless we have X-radar on.
+                let stealth = p.status & aicontinuum::sim::STATUS_STEALTH != 0;
+                if stealth && Some(p.freq) != my_freq && !game.xradar_on() {
                     continue;
                 }
                 let row = if Some(p.freq) == my_freq { ColorRow::RadarTeam } else { ColorRow::RadarEnemy };

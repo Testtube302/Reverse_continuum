@@ -76,6 +76,13 @@ pub struct Input {
     pub warp: bool,
 }
 
+/// Status bits as sent in position packets.
+pub const STATUS_STEALTH: u8 = 0x01;
+pub const STATUS_CLOAK: u8 = 0x02;
+pub const STATUS_XRADAR: u8 = 0x04;
+pub const STATUS_ANTIWARP: u8 = 0x08;
+pub const STATUS_FLASH: u8 = 0x10;
+
 /// What [`Ship::use_utilities`] did this tick.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Utility {
@@ -83,6 +90,8 @@ pub struct Utility {
     pub rocket: bool,
     pub portal: bool,
     pub warp: Option<WarpKind>,
+    /// A portal or warp was refused because an enemy antiwarp is near.
+    pub antiwarped: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -126,6 +135,8 @@ pub struct Ship {
     next_repel_tick: u32,
     /// Ticks of rocket left: thrust forward at RocketThrust up to RocketSpeed, no afterburner.
     pub rocket_ticks: u32,
+    /// Stealth/cloak/X-radar/antiwarp bits that are on, plus a pending flash (uncloaking).
+    pub status: u8,
     /// An active portal: where it is and ticks left.
     pub portal: Option<(Vec2, u32)>,
     /// Edge detection for the portal and warp keys (they act once per press).
@@ -194,6 +205,7 @@ impl Ship {
             repel_ticks: 0,
             next_repel_tick: 0,
             rocket_ticks: 0,
+            status: 0,
             portal: None,
             portal_held: false,
             warp_held: false,
@@ -283,12 +295,37 @@ impl Ship {
         if let Some(idx) = item {
             self.items[idx] -= 1;
         }
+        // Firing outside a safe zone drops the cloak, with a flash.
+        if self.status & STATUS_CLOAK != 0 {
+            self.status = (self.status & !STATUS_CLOAK) | STATUS_FLASH;
+        }
         Some(fire)
     }
 
     /// Rocket, brick, portal and warp: the items that aren't weapons. Returns what happened;
     /// the caller sends the brick and does the respawn for a plain warp.
-    pub fn use_utilities(&mut self, input: Input, settings: &ArenaSettings, in_safe: bool) -> Utility {
+    /// Flips stealth/cloak/X-radar/antiwarp if the ship has it; returns the new state.
+    /// Turning cloak off flashes, as in the reference client.
+    pub fn toggle(&mut self, bit: u8) -> Option<bool> {
+        let capable = match bit {
+            STATUS_STEALTH => self.caps.stealth,
+            STATUS_CLOAK => self.caps.cloak,
+            STATUS_XRADAR => self.caps.xradar,
+            STATUS_ANTIWARP => self.caps.antiwarp,
+            _ => false,
+        };
+        if !capable {
+            return None;
+        }
+        self.status ^= bit;
+        let on = self.status & bit != 0;
+        if bit == STATUS_CLOAK && !on {
+            self.status |= STATUS_FLASH;
+        }
+        Some(on)
+    }
+
+    pub fn use_utilities(&mut self, input: Input, settings: &ArenaSettings, in_safe: bool, antiwarped: bool) -> Utility {
         const WARP_DELAY_TICKS: u32 = 50;
         let s = *self.stats(settings);
         let now = self.tick;
@@ -307,12 +344,15 @@ impl Ship {
         }
         let portal_pressed = input.portal && !self.portal_held;
         self.portal_held = input.portal;
-        if portal_pressed && self.items[6] > 0 {
+        if (portal_pressed || (input.warp && !self.warp_held && !input.portal)) && antiwarped {
+            out.antiwarped = true;
+        }
+        if portal_pressed && self.items[6] > 0 && !antiwarped {
             self.items[6] -= 1;
             self.portal = Some((self.position, settings.warp_point_delay.max(1)));
             out.portal = true;
         }
-        let warp_pressed = input.warp && !self.warp_held && !input.portal;
+        let warp_pressed = input.warp && !self.warp_held && !input.portal && !antiwarped;
         self.warp_held = input.warp;
         if warp_pressed {
             if let Some((at, _)) = self.portal.take() {
@@ -425,6 +465,22 @@ impl Ship {
             self.energy -= ab_cost;
         }
         self.energy = (self.energy + self.recharge as f32 / 10.0 * dt).min(self.max_energy as f32);
+        // Toggles cost energy per 10 s and switch off when it runs out (reference client order).
+        for (bit, cost) in [
+            (STATUS_XRADAR, s.xradar_energy),
+            (STATUS_STEALTH, s.stealth_energy),
+            (STATUS_CLOAK, s.cloak_energy),
+            (STATUS_ANTIWARP, s.antiwarp_energy),
+        ] {
+            if self.status & bit != 0 {
+                let c = cost as f32 / 10.0 * dt;
+                if self.energy > c {
+                    self.energy -= c;
+                } else {
+                    self.status &= !bit;
+                }
+            }
+        }
 
         let radius = s.radius_tiles();
         let bounce = settings.bounce_factor.max(1);
@@ -620,12 +676,50 @@ mod tests {
     }
 
     #[test]
+    fn toggles_need_the_ability_drain_energy_and_cloak_drops_on_firing() {
+        let settings = ArenaSettings::default();
+        let map = crate::lvl::Map::empty();
+        let mut ship = Ship::new(0, Vec2::new(512.0, 512.0), &settings);
+        ship.caps.cloak = false;
+        assert_eq!(ship.toggle(STATUS_CLOAK), None);
+        ship.caps.cloak = true;
+        assert_eq!(ship.toggle(STATUS_CLOAK), Some(true));
+        // Cloak costs CloakEnergy per 10 s on top of the normal recharge.
+        ship.energy = 500.0;
+        ship.recharge = 0;
+        ship.tick(&map, &settings, Input::default());
+        assert!(ship.energy < 500.0);
+        // Firing drops the cloak with a flash.
+        ship.energy = ship.max_energy as f32;
+        assert!(ship.try_fire(Input { gun: true, ..Default::default() }, &settings, false).is_some());
+        assert_eq!(ship.status & (STATUS_CLOAK | STATUS_FLASH), STATUS_FLASH);
+        // Running out of energy switches a toggle off.
+        ship.caps.xradar = true;
+        ship.toggle(STATUS_XRADAR);
+        ship.energy = 0.0;
+        ship.tick(&map, &settings, Input::default());
+        assert_eq!(ship.status & STATUS_XRADAR, 0);
+    }
+
+    #[test]
+    fn antiwarp_blocks_portal_and_warp() {
+        let settings = ArenaSettings::default();
+        let mut ship = Ship::new(0, Vec2::new(512.0, 512.0), &settings);
+        ship.items[6] = 1;
+        let used = ship.use_utilities(Input { portal: true, ..Default::default() }, &settings, false, true);
+        assert!(used.antiwarped && !used.portal && ship.items[6] == 1);
+        ship.use_utilities(Input::default(), &settings, false, true);
+        let used = ship.use_utilities(Input { warp: true, ..Default::default() }, &settings, false, true);
+        assert!(used.antiwarped && used.warp.is_none());
+    }
+
+    #[test]
     fn rocket_pushes_forward_past_top_speed() {
         let settings = ArenaSettings::default();
         let map = crate::lvl::Map::empty();
         let mut ship = Ship::new(0, Vec2::new(512.0, 512.0), &settings);
         ship.items[5] = 1;
-        let used = ship.use_utilities(Input { rocket: true, ..Default::default() }, &settings, false);
+        let used = ship.use_utilities(Input { rocket: true, ..Default::default() }, &settings, false, false);
         assert!(used.rocket && ship.rocket_ticks > 0 && ship.items[5] == 0);
         for _ in 0..150 {
             ship.tick(&map, &settings, Input::default());
@@ -640,27 +734,27 @@ mod tests {
         let mut ship = Ship::new(0, Vec2::new(512.0, 512.0), &settings);
         ship.items[6] = 1;
         let portal = Input { portal: true, ..Default::default() };
-        assert!(ship.use_utilities(portal, &settings, false).portal);
-        ship.use_utilities(Input::default(), &settings, false);
+        assert!(ship.use_utilities(portal, &settings, false, false).portal);
+        ship.use_utilities(Input::default(), &settings, false, false);
         ship.position = Vec2::new(600.0, 600.0);
         let warp = Input { warp: true, ..Default::default() };
-        assert_eq!(ship.use_utilities(warp, &settings, false).warp, Some(WarpKind::ToPortal));
+        assert_eq!(ship.use_utilities(warp, &settings, false, false).warp, Some(WarpKind::ToPortal));
         assert_eq!((ship.position.x, ship.position.y), (512.0, 512.0));
         assert!(ship.portal.is_none());
         // Holding the key doesn't warp again; a plain warp needs full energy and leaves 1.
-        assert_eq!(ship.use_utilities(warp, &settings, false).warp, None);
-        ship.use_utilities(Input::default(), &settings, false);
+        assert_eq!(ship.use_utilities(warp, &settings, false, false).warp, None);
+        ship.use_utilities(Input::default(), &settings, false, false);
         for _ in 0..60 {
             ship.tick(&crate::lvl::Map::empty(), &settings, Input::default());
         }
         ship.energy = 10.0;
-        assert_eq!(ship.use_utilities(warp, &settings, false).warp, Some(WarpKind::NotEnoughEnergy));
-        ship.use_utilities(Input::default(), &settings, false);
+        assert_eq!(ship.use_utilities(warp, &settings, false, false).warp, Some(WarpKind::NotEnoughEnergy));
+        ship.use_utilities(Input::default(), &settings, false, false);
         for _ in 0..60 {
             ship.tick(&crate::lvl::Map::empty(), &settings, Input::default());
         }
         ship.energy = ship.max_energy as f32;
-        assert_eq!(ship.use_utilities(warp, &settings, false).warp, Some(WarpKind::Respawn));
+        assert_eq!(ship.use_utilities(warp, &settings, false, false).warp, Some(WarpKind::Respawn));
         assert_eq!(ship.energy, 1.0);
     }
 
