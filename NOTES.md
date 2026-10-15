@@ -390,3 +390,11 @@
 - Local SS.NET diagnostic probe received a Continuum challenge and stopped with
   missing-expansion status (exit 2); no login was attempted. Game Session remains
   VIE; real key2 expansion and Continuum login integration are still outstanding.
+
+- Added strict `scrty1` cache lookup from public nullspace history (5743bb7).
+  With the local server's cache, the diagnostic completed real Continuum
+  negotiation and verified the encrypted acknowledgement. Still no game login;
+  a cache is not general key2 expansion. No cache bytes committed.
+- User explicitly approved bounded transfer of reference read-only executable
+  memory to local temporary analysis. REA/Ghidra recovered 1,561 candidate
+  functions; analysis files remain outside the repository.

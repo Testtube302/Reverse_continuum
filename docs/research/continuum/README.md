@@ -164,3 +164,31 @@ attempt game login.
 The earlier protocol review should not be read as saying that no public Continuum
 packet cipher exists. The public transform exists; usable session-key expansion
 and complete client integration remain the missing pieces.
+
+## Controlled-server cache verification
+
+`ExpansionCache` reads the public nullspace `scrty1` layout from revision
+[5743bb7](https://github.com/plushmonkey/nullspace/blob/5743bb7/src/net/Crypt.cpp):
+a four-byte version header (`28 00 01 00`), followed by two banks of 1,024
+84-byte records. Only the second bank supplies expansions. Each record contains
+key2 followed by twenty little-endian words. Malformed versions, lengths, and
+conflicting duplicate entries are rejected. Unknown keys fail explicitly.
+
+The optional second argument to `continuum_probe` is a server-owned cache path:
+
+```sh
+cargo run --example continuum_probe -- 127.0.0.1:5000 /path/to/server/scrty1
+```
+
+On 2026-10-15 this completed the encrypted handshake against the existing local
+SS.NET 4.0.0 native Continuum module and verified its encrypted acknowledgement.
+No login packet was sent. The cache is neither committed nor bundled; it only
+works when the challenged key is present and does not solve arbitrary expansion.
+
+With the user's explicit approval, the reference process's read-only executable
+range `0x400000..0x4b8000` was copied locally for analysis (753,664 bytes, SHA-256
+`551c950e264c752c5a0f49903cc9663d4f4c7b2b93a02ca7f34345bea77cad7b`). Writable
+memory was excluded. REA/Ghidra raw x86 analysis with 552 prologue candidates
+recovered 1,561 candidate procedures and 954 defined strings. These are analysis
+observations, not verified function boundaries. The code copy and decompilation
+remain outside the repository.
