@@ -368,3 +368,15 @@
   Centred statics wrap 3 px short of the width; carets blink at 530 ms.
 - Test aids: --clicks "x,y;..." (one every 15 frames from 30), --type "text" (\t \n \b);
   game: --press Action@frame, --keys / --macros set names.
+
+## Continuum investigation (2026-10-15)
+- User explicitly requested REA-based transport investigation, superseding the earlier
+  no-binary-analysis scope for this work. See docs/research/continuum/README.md.
+- Fresh official 0.40 executable hash matches the isolated reference rig. Captured
+  official `00 01 ... 11 00` -> `00 10` -> `00 11` exchange; same-word VIE probe
+  returns `00 02`. Official login and arena entry verified in the isolated server log.
+- REA 6.5.0 + Ghidra 12.1.4 used on client and local server adapter/native module.
+- Public nullspace DOES include Continuum packet transforms. Added standalone Rust
+  port with 85 C++ reference vectors and bounds/CRC tests; not connected to transport.
+- Still missing: key2 expansion, key1 finalization, negotiation integration and
+  Continuum login. Constructor accepts only an already-finalized 20-word table.
