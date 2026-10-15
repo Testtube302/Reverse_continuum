@@ -64,6 +64,8 @@ struct Args {
     autoplay: bool,
     /// Startup-screen test aid: left clicks at these points, one every 15 frames from frame 30.
     clicks: Vec<(i32, i32)>,
+    /// Startup-screen test aid: typed after the clicks, one character a frame (\t Tab, \n Enter).
+    typed: String,
 }
 
 fn parse_args() -> Args {
@@ -94,6 +96,7 @@ fn parse_args() -> Args {
         open: None,
         autoplay: false,
         clicks: Vec::new(),
+        typed: String::new(),
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -130,6 +133,7 @@ fn parse_args() -> Args {
             }
             "--right" => args.right_held = true,
             "--autoplay" => args.autoplay = true,
+            "--type" => args.typed = value().replace("\\t", "\t").replace("\\n", "\n").replace("\\b", "\u{8}"),
             "--clicks" => {
                 args.clicks = value()
                     .split(';')

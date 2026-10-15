@@ -204,6 +204,85 @@ impl Profile {
     }
 }
 
+impl Trace {
+    /// Sends one ping a second and records replies; true when the lines changed.
+    fn tick(&mut self) -> bool {
+        let (Some(socket), Some(target)) = (&self.socket, self.target) else {
+            if self.lines.is_empty() {
+                self.lines.push("No zone selected.".into());
+                return true;
+            }
+            return false;
+        };
+        let mut changed = false;
+        let now_ms = self.started.elapsed().as_millis() as u32;
+        if self.last_send.is_none_or(|t| t.elapsed() >= Duration::from_secs(1)) {
+            // A cycle with no reply by the next send is a lost packet.
+            if self.last_send.is_some() && self.lines.last().is_some_and(|l| l.starts_with("Sent")) {
+                let n = self.lines.len() - 1;
+                self.lines[n] = format!("Cycle {}: no reply (lost)", self.cycles);
+            }
+            self.cycles += 1;
+            self.last_send = Some(Instant::now());
+            let _ = socket.send_to(&now_ms.to_le_bytes(), target);
+            self.lines.push(format!("Sent cycle {}", self.cycles));
+            changed = true;
+        }
+        let mut buf = [0u8; 64];
+        while let Ok((n, from)) = socket.recv_from(&mut buf) {
+            if n >= 8 && from == target {
+                let players = u32::from_le_bytes(buf[0..4].try_into().unwrap()) & 0xFFFF;
+                let sent = u32::from_le_bytes(buf[4..8].try_into().unwrap());
+                let rtt = now_ms.wrapping_sub(sent);
+                if let Some(last) = self.lines.last_mut().filter(|l| l.starts_with("Sent")) {
+                    *last = format!("Cycle {}: {} ms, {} players", self.cycles, rtt, players);
+                    changed = true;
+                }
+            }
+        }
+        changed
+    }
+}
+
+/// Every profile in profile.dat and which one is selected. The original writes one profile;
+/// we append the others, each starting at its `profile =` line, and note the selection in a
+/// `selected =` line before them (both still read as a single profile by a plain parser).
+pub fn parse_profiles(text: &str) -> (Vec<Profile>, usize) {
+    let mut selected = String::new();
+    let mut out: Vec<Profile> = Vec::new();
+    for line in text.lines().filter(|l| !l.trim_start().starts_with(';')) {
+        let Some((k, v)) = line.split_once('=') else { continue };
+        let (k, v) = (k.trim(), v.trim());
+        if k == "selected" && out.is_empty() {
+            selected = v.to_string();
+            continue;
+        }
+        if k == "profile" || out.is_empty() {
+            out.push(Profile::default());
+        }
+        out.last_mut().unwrap().entries.push((k.to_string(), v.to_string()));
+    }
+    if out.is_empty() {
+        out.push(Profile::defaults());
+    }
+    let active = out.iter().position(|p| p.get("profile") == selected).unwrap_or(0);
+    (out, active)
+}
+
+pub fn write_profiles(profiles: &[Profile], active: usize) -> String {
+    let mut out = String::from("; This file is auto-generated. DO NOT EDIT.\r\n\r\n");
+    if profiles.len() > 1 {
+        out += &format!("{:<11}= {}\r\n\r\n", "selected", profiles.get(active).map_or("", |p| p.get("profile")));
+    }
+    for p in profiles {
+        for (k, v) in &p.entries {
+            out += &format!("{k:<11}= {v}\r\n");
+        }
+        out += "\r\n";
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------------------------
 // Zone ping (UDP to game port + 1): send a 4-byte timestamp, get back <players u32><timestamp>.
 
@@ -560,11 +639,33 @@ const PROF_MACROS: i32 = 1026;
 const PROF_KEYS: i32 = 1027;
 const PROF_TARGET: i32 = 1043;
 const PROF_CHATS: i32 = 1042;
+const PROF_AUTO: i32 = 1044;
 const PROF_MOVE_UP: i32 = 1202;
 const PROF_MOVE_DOWN: i32 = 1203;
+const PROF_NEW: i32 = 1028;
+const PROF_COPY: i32 = 1030;
+const PROF_DELETE: i32 = 1029;
 const PASS_EDIT: i32 = 1023;
 const PASS_SAVE: i32 = 1201;
 const TIP_TEXT: i32 = 1227;
+const DLG_CUSTOM: u32 = 176;
+const ZONES_ADD_CUSTOM: i32 = 1021;
+const CUSTOM_NAME: i32 = 1007;
+const CUSTOM_IP: i32 = 1008;
+const CUSTOM_PORT: i32 = 1260;
+const DLG_TRACE: u32 = 107;
+const TRACE_ZONE: i32 = 1007;
+const TRACE_IP: i32 = 1008;
+const TRACE_LIST: i32 = 1209;
+const TRACE_EXPORT: i32 = 1223;
+const TRACE_CYCLES: i32 = 1010;
+const DLG_PROXY: u32 = 151;
+const PROXY_ON: i32 = 1216;
+const PROXY_HOST: i32 = 1217;
+const PROXY_PORT: i32 = 1218;
+const PROXY_AUTH: i32 = 1219;
+const PROXY_USER: i32 = 1038;
+const PROXY_PASS: i32 = 1039;
 const TIP_NEXT: i32 = 1226;
 
 const ZONE_TEXT_GREY: [u8; 3] = [128, 128, 128];
@@ -574,11 +675,24 @@ const ZONE_SELECTION: [u8; 3] = [0, 0, 128];
 
 enum Kind {
     Zones(ZonesDialog),
-    Profile,
+    /// The profiles being edited and which list row is shown in the fields.
+    Profile(Vec<Profile>, usize),
     Password,
     /// Any other dialog: shown, closed by its buttons.
     Other,
     Tip(usize),
+    Trace(Trace),
+    Proxy,
+}
+
+/// The Trace dialog's live pings to one zone.
+struct Trace {
+    target: Option<SocketAddr>,
+    socket: Option<UdpSocket>,
+    started: Instant,
+    last_send: Option<Instant>,
+    cycles: u32,
+    lines: Vec<String>,
 }
 
 struct Open {
@@ -587,6 +701,8 @@ struct Open {
 }
 
 struct ZonesDialog {
+    /// "Add Custom Zone", open on top of this dialog.
+    custom: Option<Dialog>,
     zones: Vec<Zone>,
     download: Option<std::sync::mpsc::Receiver<Result<Vec<DirZone>, String>>>,
 }
@@ -625,7 +741,9 @@ pub struct Launcher {
     spectate_icon: RgbaImage,
     ships: RgbaImage,
     font: MenuFont,
-    pub profile: Profile,
+    /// All profiles; `active` is the one in use.
+    pub profiles: Vec<Profile>,
+    pub active: usize,
     /// Every zone in zone.dat; the main list shows the `shown` ones.
     pub zones: Vec<Zone>,
     pub selected: Option<usize>,
@@ -642,6 +760,8 @@ pub struct Launcher {
     tips: Vec<String>,
     /// Directory servers for the zones dialog.
     pub servers: String,
+    /// Where Export writes files (the install folder).
+    pub data_dir: Option<std::path::PathBuf>,
     /// Set whenever profile or zones change; the frontend saves and clears it.
     pub dirty: bool,
 }
@@ -655,7 +775,7 @@ impl Launcher {
         ships: RgbaImage,
         font: RgbaImage,
         templates: Vec<Template>,
-        profile: Profile,
+        profiles: (Vec<Profile>, usize),
         zones: Vec<Zone>,
     ) -> Self {
         let mut l = Self {
@@ -664,7 +784,8 @@ impl Launcher {
             spectate_icon,
             ships,
             font: MenuFont { image: font },
-            profile,
+            active: profiles.1.min(profiles.0.len().saturating_sub(1)),
+            profiles: profiles.0,
             zones,
             selected: None,
             scroll: 0,
@@ -679,9 +800,10 @@ impl Launcher {
             menu_hot: None,
             tips,
             servers: DEFAULT_DIRECTORY_SERVERS.into(),
+            data_dir: None,
             dirty: false,
         };
-        let want = l.profile.get("zone").to_string();
+        let want = l.profiles[l.active].get("zone").to_string();
         l.selected = l.shown().iter().position(|&i| l.zones[i].name == want).or(if l.shown().is_empty() { None } else { Some(0) });
         l
     }
@@ -692,7 +814,7 @@ impl Launcher {
 
     /// Picks the skin named in the profile, if installed.
     pub fn select_skin_from_profile(&mut self) {
-        let want = self.profile.get("skin").to_string();
+        let want = self.profiles[self.active].get("skin").to_string();
         self.skin_idx = self.skins.iter().position(|(n, _)| *n == want).unwrap_or(0);
     }
 
@@ -793,7 +915,7 @@ impl Launcher {
             "zonetext" => {
                 if let Some(row) = self.zone_row_at(mx, my).filter(|&r| r < shown.len()) {
                     self.selected = Some(row);
-                    self.profile.set("zone", &self.zones[shown[row]].name.clone());
+                    self.profiles[self.active].set("zone", &self.zones[shown[row]].name.clone());
                     self.dirty = true;
                     if input.double_click {
                         return self.play();
@@ -835,8 +957,17 @@ impl Launcher {
         }
     }
 
+    /// After switching or editing profiles: its skin and zone take effect.
+    fn profile_changed(&mut self) {
+        self.select_skin_from_profile();
+        let want = self.profiles[self.active].get("zone").to_string();
+        if let Some(row) = self.shown().iter().position(|&i| self.zones[i].name == want) {
+            self.selected = Some(row);
+        }
+    }
+
     fn set_ship(&mut self, ship: u8) {
-        self.profile.set("ship", &ship.to_string());
+        self.profiles[self.active].set("ship", &ship.to_string());
         self.dirty = true;
     }
 
@@ -856,41 +987,12 @@ impl Launcher {
 
     fn open_profile(&mut self) {
         let Some(mut d) = self.new_dialog(DLG_PROFILE) else { return };
-        let p = &self.profile;
-        let name = |k: &str, default: &str| if p.get(k).is_empty() { default.to_string() } else { p.get(k).to_string() };
-        if let Some(c) = d.control_mut(PROF_LIST) {
-            c.items = vec![Item::text(&name("profile", "Default"))];
-            c.sel = Some(0);
-        }
-        d.set_text(PROF_NAME, &name("profile", "Default"));
-        d.set_text(PROF_PLAYER, p.get("name"));
-        d.set_text(PROF_PASSWORD, p.get("password"));
-        let combo = |d: &mut Dialog, id: i32, items: &[&str], sel: usize| {
-            if let Some(c) = d.control_mut(id) {
-                c.items = items.iter().map(|s| Item::text(s)).collect();
-                c.sel = Some(sel.min(items.len().saturating_sub(1)));
-            }
-        };
-        let ships: Vec<&str> = std::iter::once("<default>").chain(SHIP_NAMES.iter().copied()).chain(["Spectate"]).collect();
-        combo(&mut d, PROF_SHIP, &ships, p.ship() as usize + 1);
-        combo(&mut d, PROF_RESOLUTION, &["1024 x 768 x 16"], 0);
-        combo(&mut d, PROF_REFRESH, &["<default>"], 0);
-        combo(&mut d, PROF_WINDOW, &["Full Screen", "Window"], if p.get("windowed") == "1" { 1 } else { 0 });
-        let zone_names: Vec<String> = std::iter::once("<default>".to_string()).chain(self.zones.iter().filter(|z| z.shown).map(|z| z.name.clone())).collect();
-        let zone_refs: Vec<&str> = zone_names.iter().map(|s| s.as_str()).collect();
-        let zsel = zone_names.iter().position(|n| n == p.get("zone")).unwrap_or(0);
-        combo(&mut d, PROF_ZONE, &zone_refs, zsel);
-        combo(&mut d, PROF_MACROS, &[&name("macros", "Default")], 0);
-        combo(&mut d, PROF_KEYS, &[&name("keyboard", "Default")], 0);
-        d.set_text(PROF_TARGET, p.get("target").trim_start_matches("-1"));
-        d.set_text(PROF_CHATS, p.get("chat"));
-        for id in [PROF_MOVE_UP, PROF_MOVE_DOWN] {
-            if let Some(c) = d.control_mut(id) {
-                c.enabled = false;
-            }
-        }
+        let list = self.profiles.clone();
+        let cur = self.active;
+        refresh_profile_list(&mut d, &list, cur);
+        fill_profile_fields(&mut d, &list[cur], &self.zones);
         d.focus_id(PROF_LIST);
-        self.dialog = Some(Open { kind: Kind::Profile, d });
+        self.dialog = Some(Open { kind: Kind::Profile(list, cur), d });
     }
 
     fn open_zones(&mut self) {
@@ -904,7 +1006,7 @@ impl Launcher {
             c.sel = sel;
         }
         d.focus_id(IDOK);
-        let mut open = Open { kind: Kind::Zones(ZonesDialog { zones, download: None }), d };
+        let mut open = Open { kind: Kind::Zones(ZonesDialog { custom: None, zones, download: None }), d };
         refresh_zones(&mut open);
         self.dialog = Some(open);
     }
@@ -921,7 +1023,7 @@ impl Launcher {
 
     fn play(&mut self) -> Option<Action> {
         let zone = self.selected_zone()?;
-        let password = self.profile.get("password").to_string();
+        let password = self.profiles[self.active].get("password").to_string();
         if password.is_empty() {
             self.open_password();
             return None;
@@ -934,12 +1036,12 @@ impl Launcher {
         Some(Action::Play {
             addr,
             zone: zone.name.clone(),
-            name: self.profile.get("name").to_string(),
+            name: self.profiles[self.active].get("name").to_string(),
             password,
-            ship: self.profile.ship(),
-            fullscreen: self.profile.get("windowed") != "1",
+            ship: self.profiles[self.active].ship(),
+            fullscreen: self.profiles[self.active].get("windowed") != "1",
             resolution: self
-                .profile
+                .profiles[self.active]
                 .get("resolution")
                 .split_once('x')
                 .and_then(|(w, h)| Some((w.trim().parse().ok()?, h.trim().parse().ok()?)))
@@ -948,8 +1050,16 @@ impl Launcher {
     }
 
     fn zones_command(&mut self, id: i32) {
+        let custom = if id == ZONES_ADD_CUSTOM { self.new_dialog(DLG_CUSTOM) } else { None };
         let Some(Open { kind: Kind::Zones(z), d }) = self.dialog.as_mut() else { return };
         match id {
+            ZONES_ADD_CUSTOM => {
+                if let Some(mut c) = custom {
+                    c.set_text(CUSTOM_PORT, "5000");
+                    c.focus_id(CUSTOM_NAME);
+                    z.custom = Some(c);
+                }
+            }
             ZONES_DOWNLOAD if z.download.is_none() => {
                 self.servers = d.text(ZONES_SERVERS);
                 z.download = Some(start_download(&self.servers));
@@ -974,6 +1084,52 @@ impl Launcher {
 
     fn update_dialog(&mut self, input: &Input) -> Option<Action> {
         let open = self.dialog.as_mut()?;
+        if let Kind::Trace(t) = &mut open.kind {
+            if t.tick() {
+                let lines: Vec<Item> = t.lines.iter().map(|l| Item::text(l)).collect();
+                if let Some(c) = open.d.control_mut(TRACE_LIST) {
+                    let rows = ((c.rect.h() - 4) / 13).max(1) as usize;
+                    c.top = lines.len().saturating_sub(rows);
+                    c.items = lines;
+                }
+                open.d.set_text(TRACE_CYCLES, &format!("Cycles: {}", t.cycles));
+            }
+        }
+        // Add Custom Zone sits on top of the zones dialog and takes the input while open.
+        if let Kind::Zones(z) = &mut open.kind {
+            if let Some(events) = z.custom.as_mut().map(|c| c.handle(input)) {
+                for ev in events {
+                    match ev {
+                        Event::Command(IDCANCEL) => {
+                            z.custom = None;
+                            break;
+                        }
+                        Event::Command(IDOK) => {
+                            let Some(c) = z.custom.as_ref() else { break };
+                            let name = c.text(CUSTOM_NAME).trim().to_string();
+                            let ip = c.text(CUSTOM_IP).trim().to_string();
+                            let port = c.text(CUSTOM_PORT).trim().parse::<u16>().unwrap_or(0);
+                            if name.is_empty() || ip.is_empty() || port == 0 {
+                                continue;
+                            }
+                            let mut zone = Zone::new(&name, &ip, port);
+                            zone.shown = true;
+                            z.zones.retain(|old| !old.name.eq_ignore_ascii_case(&name));
+                            z.zones.push(zone);
+                            let row = z.zones.len() - 1;
+                            z.custom = None;
+                            if let Some(list) = open.d.control_mut(ZONES_LIST) {
+                                list.sel = Some(row);
+                            }
+                            refresh_zones(open);
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                return None;
+            }
+        }
         // Finished downloads.
         if let Kind::Zones(z) = &mut open.kind {
             if let Some(result) = z.download.as_ref().and_then(|rx| rx.try_recv().ok()) {
@@ -1006,7 +1162,27 @@ impl Launcher {
                 (_, Event::Command(IDCANCEL)) => {
                     self.dialog = None;
                 }
-                (Kind::Other, Event::Command(IDOK)) => {
+                (Kind::Other | Kind::Trace(_), Event::Command(IDOK)) => {
+                    self.dialog = None;
+                }
+                (Kind::Trace(t), Event::Command(TRACE_EXPORT)) => {
+                    if let Some(dir) = &self.data_dir {
+                        let path = dir.join("trace.txt");
+                        let ok = std::fs::write(&path, t.lines.join("\r\n") + "\r\n").is_ok();
+                        t.lines.push(if ok { format!("Exported to {}", path.display()) } else { "Export failed.".into() });
+                        t.last_send = None;
+                    }
+                }
+                (Kind::Proxy, Event::Command(IDOK)) => {
+                    let d = &open.d;
+                    let p = &mut self.profiles[self.active];
+                    p.set("proxy", if d.checked(PROXY_ON) { "1" } else { "0" });
+                    p.set("proxyhost", d.text(PROXY_HOST).trim());
+                    p.set("proxyport", d.text(PROXY_PORT).trim());
+                    p.set("proxyauth", if d.checked(PROXY_AUTH) { "1" } else { "0" });
+                    p.set("proxyuser", d.text(PROXY_USER).trim());
+                    p.set("proxypass", &d.text(PROXY_PASS));
+                    self.dirty = true;
                     self.dialog = None;
                 }
                 (Kind::Tip(k), Event::Command(TIP_NEXT)) => {
@@ -1021,48 +1197,61 @@ impl Launcher {
                         continue;
                     }
                     if open.d.checked(PASS_SAVE) {
-                        self.profile.set("password", &password);
+                        self.profiles[self.active].set("password", &password);
                         self.dirty = true;
                     }
                     self.dialog = None;
                     let zone = self.selected_zone()?;
                     return self.play_with(&zone, password);
                 }
-                (Kind::Profile, Event::Command(IDOK)) => {
-                    let d = &open.d;
-                    let sel = |id: i32| d.control(id).and_then(|c| c.sel).unwrap_or(0);
-                    let player = d.text(PROF_PLAYER).trim().to_string();
-                    let profile = d.text(PROF_NAME).trim().to_string();
-                    let password = d.text(PROF_PASSWORD);
-                    let ship = sel(PROF_SHIP);
-                    let windowed = sel(PROF_WINDOW);
-                    let zone = d.control(PROF_ZONE).and_then(|c| c.sel.and_then(|s| c.items.get(s))).map(|i| i.runs[0].1.clone());
-                    let chats = d.text(PROF_CHATS);
-                    let target = d.text(PROF_TARGET);
-                    let p = &mut self.profile;
-                    if !profile.is_empty() {
-                        p.set("profile", &profile);
-                    }
-                    if !player.is_empty() {
-                        p.set("name", &player);
-                    }
-                    p.set("password", &password);
-                    if ship > 0 {
-                        p.set("ship", &(ship - 1).to_string());
-                    }
-                    p.set("windowed", &windowed.to_string());
-                    p.set("chat", &chats);
-                    p.set("target", if target.is_empty() { "-1" } else { &target });
-                    if let Some(z) = zone {
-                        p.set("zone", if z == "<default>" { "" } else { &z });
-                    }
+                (Kind::Profile(list, cur), Event::Command(IDOK)) => {
+                    read_profile_fields(&open.d, &mut list[*cur]);
+                    self.profiles = std::mem::take(list);
+                    self.active = *cur;
                     self.dirty = true;
                     self.dialog = None;
-                    // The zone choice also selects it on the main list.
-                    let want = self.profile.get("zone").to_string();
-                    if let Some(row) = self.shown().iter().position(|&i| self.zones[i].name == want) {
-                        self.selected = Some(row);
+                    self.profile_changed();
+                }
+                (Kind::Profile(list, cur), Event::Select(PROF_LIST, row)) => {
+                    read_profile_fields(&open.d, &mut list[*cur]);
+                    *cur = row.min(list.len() - 1);
+                    fill_profile_fields(&mut open.d, &list[*cur], &self.zones);
+                    refresh_profile_list(&mut open.d, list, *cur);
+                }
+                (Kind::Profile(list, cur), Event::Command(id @ (PROF_NEW | PROF_COPY | PROF_DELETE | PROF_MOVE_UP | PROF_MOVE_DOWN))) => {
+                    read_profile_fields(&open.d, &mut list[*cur]);
+                    let unique = |list: &[Profile], base: &str| {
+                        (1..).map(|n| if n == 1 { base.to_string() } else { format!("{base} {n}") }).find(|c| !list.iter().any(|p| p.get("profile") == c)).unwrap()
+                    };
+                    match id {
+                        PROF_NEW => {
+                            let mut p = Profile::defaults();
+                            p.set("profile", &unique(list, "New Profile"));
+                            list.insert(*cur + 1, p);
+                            *cur += 1;
+                        }
+                        PROF_COPY => {
+                            let mut p = list[*cur].clone();
+                            p.set("profile", &unique(list, &format!("Copy of {}", list[*cur].get("profile"))));
+                            list.insert(*cur + 1, p);
+                            *cur += 1;
+                        }
+                        PROF_DELETE if list.len() > 1 => {
+                            list.remove(*cur);
+                            *cur = (*cur).min(list.len() - 1);
+                        }
+                        PROF_MOVE_UP if *cur > 0 => {
+                            list.swap(*cur, *cur - 1);
+                            *cur -= 1;
+                        }
+                        PROF_MOVE_DOWN if *cur + 1 < list.len() => {
+                            list.swap(*cur, *cur + 1);
+                            *cur += 1;
+                        }
+                        _ => {}
                     }
+                    fill_profile_fields(&mut open.d, &list[*cur], &self.zones);
+                    refresh_profile_list(&mut open.d, list, *cur);
                 }
                 (Kind::Zones(z), Event::Command(IDOK)) => {
                     let mut zones = std::mem::take(&mut z.zones);
@@ -1117,7 +1306,7 @@ impl Launcher {
         let hover = if self.dialog.is_none() { self.hit(mx, my).map(|h| h.name.clone()) } else { None };
         let shown = self.shown();
         let rows = self.rows();
-        let ship = self.profile.ship();
+        let ship = self.profiles[self.active].ship();
         for h in &self.skin().hotspots {
             let n = h.name.as_str();
             let alt = match n {
@@ -1146,7 +1335,7 @@ impl Launcher {
         }
         if let Some(r) = self.rect("proftext") {
             for (i, key) in ["profile", "name", "macros", "keyboard"].iter().enumerate() {
-                let v: String = self.profile.get(key).chars().take(23).collect();
+                let v: String = self.profiles[self.active].get(key).chars().take(23).collect();
                 self.font.draw(c, &v, BAND_YELLOW, r.x0, r.y0 + i as i32 * 16);
             }
         }
@@ -1200,12 +1389,15 @@ impl Launcher {
         c.origin = (0, 0);
         if let Some(open) = &self.dialog {
             open.d.draw(c);
+            if let Kind::Zones(ZonesDialog { custom: Some(cd), .. }) = &open.kind {
+                cd.draw(c);
+            }
         }
         self.draw_menu_popup(c);
     }
 
     fn menus(&self) -> Vec<menubar::Menu> {
-        let res = self.profile.get("resolution");
+        let res = self.profiles[self.active].get("resolution");
         let resolution = res
             .split_once('x')
             .and_then(|(w, h)| Some((w.trim().parse().ok()?, h.trim().parse().ok()?)))
@@ -1213,7 +1405,7 @@ impl Launcher {
         let names: Vec<String> = self.skins.iter().skip(1).map(|(n, _)| n.clone()).collect();
         menubar::menus(&menubar::State {
             resolution,
-            windowed: self.profile.get("windowed") == "1",
+            windowed: self.profiles[self.active].get("windowed") == "1",
             skins: &names,
             skin: self.skin_idx,
         })
@@ -1309,18 +1501,26 @@ impl Launcher {
             Cmd::Zones => self.open_zones(),
             Cmd::Macros => self.open_other(120),
             Cmd::KeyDefs => self.open_other(122),
-            Cmd::Trace => self.open_other(107),
+            Cmd::Trace => self.open_trace(),
             Cmd::Options => self.open_other(159),
             Cmd::AdvancedOptions => self.open_other(113),
-            Cmd::Proxy => self.open_other(151),
+            Cmd::Proxy => self.open_proxy(),
             Cmd::Banners => self.open_other(161),
             Cmd::About => self.open_other(121),
             Cmd::Tip => self.open_tip(),
-            Cmd::PrevProfile | Cmd::NextProfile => {}
+            Cmd::PrevProfile | Cmd::NextProfile => {
+                let n = self.profiles.len();
+                let next = if cmd == Cmd::NextProfile { (self.active + 1).min(n - 1) } else { self.active.saturating_sub(1) };
+                if next != self.active {
+                    self.active = next;
+                    self.dirty = true;
+                    self.profile_changed();
+                }
+            }
             Cmd::PrevShip | Cmd::NextShip => {
                 // Spectator (8) sits before the Warbird on the ship panel.
                 let order = [8u8, 0, 1, 2, 3, 4, 5, 6, 7];
-                let k = order.iter().position(|&s| s == self.profile.ship()).unwrap_or(0);
+                let k = order.iter().position(|&s| s == self.profiles[self.active].ship()).unwrap_or(0);
                 let k = if cmd == Cmd::NextShip { (k + 1) % 9 } else { (k + 8) % 9 };
                 self.set_ship(order[k]);
             }
@@ -1329,7 +1529,7 @@ impl Launcher {
                     let cur = self.selected.unwrap_or(0);
                     let next = if cmd == Cmd::NextZone { (cur + 1).min(shown.len() - 1) } else { cur.saturating_sub(1) };
                     self.selected = Some(next);
-                    self.profile.set("zone", &self.zones[shown[next]].name.clone());
+                    self.profiles[self.active].set("zone", &self.zones[shown[next]].name.clone());
                     self.dirty = true;
                     let rows = self.rows();
                     if next < self.scroll {
@@ -1340,18 +1540,18 @@ impl Launcher {
                 }
             }
             Cmd::Resolution(w, h) => {
-                self.profile.set("resolution", &format!("{w}x{h}"));
+                self.profiles[self.active].set("resolution", &format!("{w}x{h}"));
                 self.dirty = true;
             }
             Cmd::Windowed => {
-                let on = self.profile.get("windowed") == "1";
-                self.profile.set("windowed", if on { "0" } else { "1" });
+                let on = self.profiles[self.active].get("windowed") == "1";
+                self.profiles[self.active].set("windowed", if on { "0" } else { "1" });
                 self.dirty = true;
             }
             Cmd::Skin(k) => {
                 if k < self.skins.len() {
                     self.skin_idx = k;
-                    self.profile.set("skin", &self.skins[k].0.clone());
+                    self.profiles[self.active].set("skin", &self.skins[k].0.clone());
                     self.dirty = true;
                     self.scroll = 0;
                 }
@@ -1391,6 +1591,33 @@ impl Launcher {
         }
     }
 
+    fn open_trace(&mut self) {
+        let Some(mut d) = self.new_dialog(DLG_TRACE) else { return };
+        let zone = self.selected_zone();
+        d.set_text(TRACE_ZONE, zone.as_ref().map_or("", |z| z.name.as_str()));
+        d.set_text(TRACE_IP, &zone.as_ref().map_or(String::new(), |z| format!("{}:{}", z.ip, z.port)));
+        d.set_text(TRACE_CYCLES, "Cycles: 0");
+        d.focus_id(IDOK);
+        let target = zone.and_then(|z| z.addr()).map(|a| SocketAddr::new(a.ip(), a.port().wrapping_add(1)));
+        let socket = UdpSocket::bind("0.0.0.0:0").ok().filter(|s| s.set_nonblocking(true).is_ok());
+        let trace = Trace { target, socket, started: Instant::now(), last_send: None, cycles: 0, lines: Vec::new() };
+        self.dialog = Some(Open { kind: Kind::Trace(trace), d });
+    }
+
+    fn open_proxy(&mut self) {
+        let Some(mut d) = self.new_dialog(DLG_PROXY) else { return };
+        let p = &self.profiles[self.active];
+        for (id, key) in [(PROXY_ON, "proxy"), (PROXY_AUTH, "proxyauth")] {
+            if let Some(c) = d.control_mut(id) {
+                c.checked = p.get(key) == "1";
+            }
+        }
+        for (id, key) in [(PROXY_HOST, "proxyhost"), (PROXY_PORT, "proxyport"), (PROXY_USER, "proxyuser"), (PROXY_PASS, "proxypass")] {
+            d.set_text(id, p.get(key));
+        }
+        self.dialog = Some(Open { kind: Kind::Proxy, d });
+    }
+
     fn open_tip(&mut self) {
         let Some(mut d) = self.new_dialog(160) else { return };
         let k = (self.started.elapsed().as_nanos() as usize) % self.tips.len().max(1);
@@ -1398,6 +1625,87 @@ impl Launcher {
         d.focus_id(IDCANCEL);
         self.dialog = Some(Open { kind: Kind::Tip(k), d });
     }
+}
+
+/// Profile names in the dialog's list, with Move Up/Down and Delete enabled when they apply.
+fn refresh_profile_list(d: &mut Dialog, list: &[Profile], cur: usize) {
+    if let Some(c) = d.control_mut(PROF_LIST) {
+        c.items = list.iter().map(|p| Item::text(p.get("profile"))).collect();
+        c.sel = Some(cur);
+    }
+    for (id, on) in [(PROF_MOVE_UP, cur > 0), (PROF_MOVE_DOWN, cur + 1 < list.len()), (PROF_DELETE, list.len() > 1)] {
+        if let Some(c) = d.control_mut(id) {
+            c.enabled = on;
+        }
+    }
+}
+
+fn set_combo(d: &mut Dialog, id: i32, items: &[String], sel: usize) {
+    if let Some(c) = d.control_mut(id) {
+        c.items = items.iter().map(|s| Item::text(s)).collect();
+        c.sel = Some(sel.min(items.len().saturating_sub(1)));
+    }
+}
+
+fn combo_text(d: &Dialog, id: i32) -> Option<String> {
+    d.control(id).and_then(|c| c.sel.and_then(|s| c.items.get(s))).map(|i| i.runs[0].1.clone())
+}
+
+fn resolution_names() -> Vec<String> {
+    menubar::RESOLUTIONS.iter().map(|(w, h)| format!("{w} x {h} x 16")).collect()
+}
+
+/// Shows one profile in the Edit Selected Profile fields.
+fn fill_profile_fields(d: &mut Dialog, p: &Profile, zones: &[Zone]) {
+    let or = |k: &str, default: &str| if p.get(k).is_empty() { default.to_string() } else { p.get(k).to_string() };
+    d.set_text(PROF_NAME, &or("profile", "Default"));
+    d.set_text(PROF_PLAYER, p.get("name"));
+    d.set_text(PROF_PASSWORD, p.get("password"));
+    let ships: Vec<String> = std::iter::once("<default>").chain(SHIP_NAMES.iter().copied()).chain(["Spectate"]).map(String::from).collect();
+    set_combo(d, PROF_SHIP, &ships, p.ship() as usize + 1);
+    let res = resolution_names();
+    let want = p.get("resolution").replace('x', " x ") + " x 16";
+    set_combo(d, PROF_RESOLUTION, &res, res.iter().position(|r| *r == want).unwrap_or(5));
+    set_combo(d, PROF_REFRESH, &["<default>".to_string()], 0);
+    set_combo(d, PROF_WINDOW, &["Full Screen".to_string(), "Window".to_string()], (p.get("windowed") == "1") as usize);
+    let zone_names: Vec<String> =
+        std::iter::once("<default>".to_string()).chain(zones.iter().filter(|z| z.shown).map(|z| z.name.clone())).collect();
+    let zsel = zone_names.iter().position(|n| n == p.get("zone")).unwrap_or(0);
+    set_combo(d, PROF_ZONE, &zone_names, zsel);
+    set_combo(d, PROF_MACROS, &[or("macros", "Default")], 0);
+    set_combo(d, PROF_KEYS, &[or("keyboard", "Default")], 0);
+    d.set_text(PROF_TARGET, p.get("target").trim_start_matches("-1"));
+    d.set_text(PROF_CHATS, p.get("chat"));
+    d.set_text(PROF_AUTO, p.get("auto"));
+}
+
+/// Copies the Edit Selected Profile fields back into a profile.
+fn read_profile_fields(d: &Dialog, p: &mut Profile) {
+    let sel = |id: i32| d.control(id).and_then(|c| c.sel).unwrap_or(0);
+    let name = d.text(PROF_NAME).trim().to_string();
+    if !name.is_empty() {
+        p.set("profile", &name);
+    }
+    let player = d.text(PROF_PLAYER).trim().to_string();
+    if !player.is_empty() {
+        p.set("name", &player);
+    }
+    p.set("password", &d.text(PROF_PASSWORD));
+    let ship = sel(PROF_SHIP);
+    if ship > 0 {
+        p.set("ship", &(ship - 1).to_string());
+    }
+    if let Some(&(w, h)) = menubar::RESOLUTIONS.get(sel(PROF_RESOLUTION)) {
+        p.set("resolution", &format!("{w}x{h}"));
+    }
+    p.set("windowed", &sel(PROF_WINDOW).to_string());
+    if let Some(z) = combo_text(d, PROF_ZONE) {
+        p.set("zone", if z == "<default>" { "" } else { &z });
+    }
+    let target = d.text(PROF_TARGET);
+    p.set("target", if target.is_empty() { "-1" } else { &target });
+    p.set("chat", &d.text(PROF_CHATS));
+    p.set("auto", &d.text(PROF_AUTO));
 }
 
 /// Rebuilds the zones dialog's owner-drawn list, its description panel and the add/remove
@@ -1475,6 +1783,13 @@ mod tests {
     #[test]
     fn profile_keeps_unknown_keys() {
         let mut p = Profile::parse("; c\r\nprofile    = Default\r\nname       = Name\r\nship       = 8\r\nchat       = \r\n");
+        let (set, active) = parse_profiles(&write_profiles(&[p.clone(), Profile::defaults()], 1));
+        assert_eq!((set.len(), active), (2, 0), "both named Default: the first matches");
+        let mut other = Profile::defaults();
+        other.set("profile", "Other");
+        let (set, active) = parse_profiles(&write_profiles(&[p.clone(), other], 1));
+        assert_eq!((set.len(), active, set[1].get("profile")), (2, 1, "Other"));
+        assert_eq!(parse_profiles("profile = A\r\nname = X\r\n").0[0].get("name"), "X");
         assert_eq!((p.get("name"), p.ship()), ("Name", 8));
         p.set("ship", "2");
         let again = Profile::parse(&p.write());

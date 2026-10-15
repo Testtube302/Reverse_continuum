@@ -478,7 +478,7 @@ impl Dialog {
         }
         if let Some(i) = self.focus {
             let c = &mut self.controls[i];
-            if c.t.class == Class::Edit {
+            if c.t.class == Class::Edit && c.t.style & 0x800 == 0 {
                 for &ch in &input.chars {
                     let ok = if c.t.style & ES_NUMBER != 0 { ch.is_ascii_digit() } else { (' '..='~').contains(&ch) };
                     if ok && c.text.len() < 63 {
@@ -685,10 +685,10 @@ impl Dialog {
                 } else {
                     self.text_line(c, &shown, tx, ty, TEXT, false);
                 }
-                c.clip = None;
                 if focused && ctl.t.style & ES_MULTILINE == 0 && ctl.t.style & 0x800 == 0 {
                     c.fill(tx + self.font.width(&shown), ty, 1, fh, TEXT);
                 }
+                c.clip = None;
             }
             Class::Static => {
                 let lines = wrap_px(&self.font, &ctl.text, r.w());

@@ -30,8 +30,8 @@ impl MenuScreen {
         let font = assets.graphic("menutext")?;
         let profile = assets
             .read("profile.dat")
-            .map(|b| Profile::parse(&String::from_utf8_lossy(&b)))
-            .unwrap_or_else(|_| Profile::defaults());
+            .map(|b| launcher::parse_profiles(&String::from_utf8_lossy(&b)))
+            .unwrap_or_else(|_| (vec![Profile::defaults()], 0));
         let mut zones = assets.read("zone.dat").map(|b| launcher::parse_zone_dat(&String::from_utf8_lossy(&b))).unwrap_or_default();
         if !zones.iter().any(|z| z.name == HOME_ZONE.0) {
             let mut z = Zone::new(HOME_ZONE.0, HOME_ZONE.1, HOME_ZONE.2);
@@ -63,6 +63,7 @@ impl MenuScreen {
             .unwrap_or_default();
         let mut launcher = Launcher::new(skin, extra, tips, spectate, ships, font, templates, profile, zones);
         launcher.select_skin_from_profile();
+        launcher.data_dir = Some(assets.path(""));
         let (w, h) = launcher.size();
         let canvas = Canvas::new(w, h);
         let texture = Texture2D::from_rgba8(w as u16, h as u16, &canvas.px);
@@ -75,7 +76,7 @@ impl MenuScreen {
             return;
         }
         self.launcher.dirty = false;
-        let _ = std::fs::write(self.assets_root.join("profile.dat"), self.launcher.profile.write());
+        let _ = std::fs::write(self.assets_root.join("profile.dat"), launcher::write_profiles(&self.launcher.profiles, self.launcher.active));
         let _ = std::fs::write(self.assets_root.join("zone.dat"), launcher::write_zone_dat(&self.launcher.zones));
     }
 
@@ -162,6 +163,15 @@ impl MenuScreen {
             // Test aid: open a dialog once the first pings have had time to come back.
             if let (Some(which), 20) = (&args.open, frame) {
                 self.launcher.open(which);
+            }
+            let typing_from = 30 + 15 * args.clicks.len() as u32 + 10;
+            if let Some(ch) = frame.checked_sub(typing_from).and_then(|k| args.typed.chars().nth(k as usize)) {
+                match ch {
+                    '\t' => input.tab = true,
+                    '\n' => input.enter = true,
+                    '\u{8}' => input.backspace = true,
+                    c => input.chars.push(c),
+                }
             }
             let mut action = self.launcher.update(&input);
             if args.autoplay && frame == 30 {

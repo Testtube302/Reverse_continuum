@@ -342,3 +342,10 @@
     shown zones bold (synthetic: glyphs again 1 px right, advance +1), others (128,128,128);
     players right-aligned ending x+30, name at x+43 from the list's inner left.
   - combo drop-down: 1 px black frame under the field, 13 px rows, navy hot row; matches.
+- Profiles: profile.dat may hold several profiles (each from its `profile =` line) with a
+  `selected =` line first; a single-profile file from the original still reads. Profile dialog
+  New/Copy/Delete/Move Up/Down and Navigate Prev/Next Profile work.
+- Zones: Add Custom... (dialog 176) on top of the zones dialog. Trace (107): one ping a second to
+  the selected zone, Cycles counter, Export writes trace.txt. Proxy (151) saves proxy* keys in the
+  profile (the client doesn't use a proxy yet). Macros/KeyDefs/Options/Advanced/Banners: shown only.
+- Test aids: --clicks "x,y;..." (one every 15 frames from 30), --type "text" (\t \n \b).
