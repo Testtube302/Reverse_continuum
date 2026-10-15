@@ -159,16 +159,12 @@ attempt game login.
 
 ## Next unresolved work
 
-1. Establish an authorized, reproducible way to obtain the 20-word expanded table
-   for the handshake's `key2`; this investigation has not recovered that operation.
-2. Validate the complete encrypted handshake against the native server using a
-   genuine expanded table. Synthetic loopback success is not proof of this.
-3. Add the Continuum login format and test sustained operation on the controlled
-   zone. Separately establish how that zone handles client-integrity checks.
-
-The earlier protocol review should not be read as saying that no public Continuum
-packet cipher exists. The public transform exists; usable session-key expansion
-and complete client integration remain the missing pieces.
+The encrypted handshake, Continuum login format, and a 90-second local session have
+now been verified using the reference adapter described below. Remaining work is
+production packaging or standalone key expansion, cross-platform validation, and
+server-specific billing/integrity compatibility. See [the review handoff](REVIEW_HANDOFF.md)
+for checkout instructions and concrete review priorities. Public-zone testing was
+declined; no public-zone compatibility result is claimed.
 
 ## Controlled-server cache verification
 

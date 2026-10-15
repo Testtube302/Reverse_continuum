@@ -411,3 +411,6 @@
   it is not a standalone Rust expansion rewrite. Billing identity is unspecified
   and executable checksum remains zero; all-public-zone compatibility unproven.
 - Public-zone verification was declined by the user; no public-zone login was sent.
+- Added an in-repository Claude/reviewer handoff with checkout instructions,
+  available vs external artifacts, reproducible local commands, and concrete
+  production blockers. Updated stale research status and root README provenance.
