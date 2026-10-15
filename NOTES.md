@@ -380,3 +380,13 @@
   port with 85 C++ reference vectors and bounds/CRC tests; not connected to transport.
 - Still missing: key2 expansion, key1 finalization, negotiation integration and
   Continuum login. Constructor accepts only an already-finalized 20-word table.
+
+- Follow-up: implemented the public key1 finalization (derived from the RSA Data
+  Security, Inc. MD5 Message Digest Algorithm as modified by nullspace), verified
+  with 32 independent C++ vectors. This is not key2 expansion.
+- Added Transport::connect_continuum with an explicit expanded-key lookup callback,
+  bounded plaintext handshake retries, encrypted acknowledgement gating, and
+  cipher-specific wire-size guards. Six synthetic UDP tests cover the paths.
+- Local SS.NET diagnostic probe received a Continuum challenge and stopped with
+  missing-expansion status (exit 2); no login was attempted. Game Session remains
+  VIE; real key2 expansion and Continuum login integration are still outstanding.

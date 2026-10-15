@@ -2,8 +2,9 @@
 //!
 //! Ported from nullspace (MIT, Copyright (c) 2021 plushmonkey).
 //! See docs/research/continuum/LICENSE-nullspace and README.md for sources and limits.
-//! Callers must supply the FINAL session table; the server's two handshake words
-//! are not this table. This module is not wired into the live transport yet.
+//! Callers must supply an expanded or finalized session table; the server's two
+//! handshake words are not this table. Transport supports an external key lookup;
+//! the game's default session still uses VIE.
 
 pub const MAX_PLAINTEXT: usize = 520;
 pub const MAX_CIPHERTEXT: usize = MAX_PLAINTEXT + 2;
@@ -20,6 +21,12 @@ pub struct ContinuumCipher {
 }
 
 impl ContinuumCipher {
+    /// Finalizes an already-expanded key2 table with this handshake's key1.
+    /// This does not derive the expanded table from key2.
+    pub fn from_expanded_table(table: [u32; 20], key1: u32) -> Self {
+        Self::from_final_session_table(super::continuum_key::finalize(table, key1))
+    }
+
     pub fn from_final_session_table(key: [u32; 20]) -> Self {
         Self { key }
     }

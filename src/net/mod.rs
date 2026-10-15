@@ -2,5 +2,6 @@
 
 pub mod session;
 pub mod continuum;
+mod continuum_key;
 pub mod transport;
 pub mod vie;
