@@ -889,7 +889,10 @@ impl Session {
         }
         eprintln!("[Session] requesting map download");
         self.note(format!("downloading map {name}"));
-        self.transport.send_reliable(&[0x0C]);
+        // Continuum file requests include a little-endian index (zero is the map).
+        // See nullspace FileRequester::SendNextRequest.
+        let request: &[u8] = if self.continuum_id.is_some() { &[0x0C, 0, 0] } else { &[0x0C] };
+        self.transport.send_reliable(request);
     }
 
     fn on_compressed_map(&mut self, p: &[u8]) {

@@ -318,6 +318,9 @@ impl Transport {
     fn fail(&mut self, why: &str) {
         if self.state != State::Disconnected {
             eprintln!("[Connection] {why}");
+            eprintln!("[Connection] transfer state: huge bytes {}, small bytes {}, next reliable {}, buffered reliable {}, first buffered {:?}, unacked outgoing {}",
+                self.huge_chunk.len(), self.small_chunk.len(), self.next_expected_id,
+                self.pending_in.len(), self.pending_in.keys().next(), self.unacked.len());
             self.state = State::Disconnected;
             self.events.push_back(Event::Disconnected(why.to_string()));
         }

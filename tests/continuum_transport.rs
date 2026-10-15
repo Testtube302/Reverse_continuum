@@ -362,3 +362,44 @@ fn completes_handshake_with_independent_legacy_crc_short_ack() {
         &[0, 5]
     );
 }
+
+#[test]
+fn continuum_session_requests_map_with_file_index() {
+    use aicontinuum::net::session::{Config, Session};
+    let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+    server.set_read_timeout(Some(Duration::from_millis(500))).unwrap();
+    let mut client = Session::connect_continuum(Config {
+        server: server.local_addr().unwrap(), name: "fixture".into(), password: "fixture".into(),
+        arena: None, map_dir: std::env::temp_dir().join("aic-missing-fixture-map"),
+    }, |_| Some([0; 20]), [0; 64]).unwrap();
+    let mut buf = [0; 2048];
+    let (_, addr) = server.recv_from(&mut buf).unwrap();
+    server.send_to(&RESPONSE, addr).unwrap();
+    std::thread::sleep(Duration::from_millis(20));
+    client.update();
+    assert_eq!(receive(&server), ACK);
+    let cipher = reference_cipher();
+    server.send_to(&cipher.encrypt(&[0, 2]).unwrap(), addr).unwrap();
+    std::thread::sleep(Duration::from_millis(20));
+    client.update();
+    // Drain sync and login before the simulated server accepts the login.
+    for _ in 0..2 { receive(&server); }
+    let mut response = vec![0, 3, 0, 0, 0, 0, 0x0a, 0];
+    server.send_to(&cipher.encrypt(&response).unwrap(), addr).unwrap();
+    response = vec![0, 3, 1, 0, 0, 0, 0x29];
+    response.extend_from_slice(b"fixture-map.lvl\0");
+    response.extend_from_slice(&0x12345678u32.to_le_bytes());
+    response.extend_from_slice(&1234u32.to_le_bytes());
+    server.send_to(&cipher.encrypt(&response).unwrap(), addr).unwrap();
+    std::thread::sleep(Duration::from_millis(20));
+    client.update();
+    let mut found = false;
+    for _ in 0..3 {
+        let packet = cipher.decrypt(&receive(&server)).unwrap();
+        if packet.starts_with(&[0, 3]) && packet.get(6) == Some(&0x0c) {
+            assert_eq!(&packet[6..], &[0x0c, 0, 0]);
+            found = true;
+        }
+    }
+    assert!(found, "missing indexed Continuum map request");
+}

@@ -436,3 +436,12 @@
   summary (map/settings/join/security readiness), game packet type counts without
   payloads, and arena lifecycle diagnostics. Local loopback login/arena entry and
   the regression suite pass. Public disconnect cause remains undetermined.
+
+- Owner retry at 14:43:40 reached InArena with joined=true/settings=true/map=false,
+  no pending security key and zero security replies. Map download was requested but
+  no complete 0x2a file reached Session. Corrected Continuum requests to 0x0c plus
+  LE16 file index zero, matching public nullspace FileRequester::SendNextRequest;
+  VIE keeps its one-byte request. SS.NET accepts either, so earlier local tests
+  did not expose this difference. Added synthetic encrypted-session regression and
+  transfer/reliable queue sizes on disconnect. This difference is confirmed, but
+  its causal role in Trench Wars' disconnect is not yet established.
