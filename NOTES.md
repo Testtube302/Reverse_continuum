@@ -429,3 +429,10 @@
   submission/result codes and session key challenge progress, and labeled disconnects
   during login. No credentials, identity bytes, keys or packet bodies are logged.
   No public-server test was initiated; the server's reason remains unknown.
+
+- Owner retry at 14:40:50 explicitly received login response 0 (OK) from Trench
+  Wars, followed by reliable/clustered arena traffic and a core disconnect. Login
+  is accepted; sustained arena entry is not yet verified. Added disconnect state
+  summary (map/settings/join/security readiness), game packet type counts without
+  payloads, and arena lifecycle diagnostics. Local loopback login/arena entry and
+  the regression suite pass. Public disconnect cause remains undetermined.

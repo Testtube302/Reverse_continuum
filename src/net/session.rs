@@ -209,6 +209,7 @@ pub struct Session {
     pub spectate_at: Vec2,
     pending_security_key: Option<u32>,
     pub security_replies: u32,
+    received_packet_types: [u32; 256],
     expected_map_checksum: u32,
     last_position_sent: u32,
     last_position_timestamp: u32,
@@ -261,6 +262,7 @@ impl Session {
             spectate_at: Vec2::new(512.0, 512.0),
             pending_security_key: None,
             security_replies: 0,
+            received_packet_types: [0; 256],
             expected_map_checksum: 0,
             last_position_sent: 0,
             last_position_timestamp: 0,
@@ -282,6 +284,14 @@ impl Session {
 
     fn fail(&mut self, why: String) {
         eprintln!("[Session] {why}");
+        eprintln!("[Session] disconnect state: phase {:?}, joined {}, map loaded {}, settings loaded {}, security pending {}, security replies {}",
+            self.phase, self.joined, self.map.is_some(), self.settings.is_some(),
+            self.pending_security_key.is_some(), self.security_replies);
+        let counts: Vec<_> = self.received_packet_types.iter().enumerate()
+            .filter(|(_, count)| **count != 0)
+            .map(|(kind, count)| format!("{kind:02x}:{count}"))
+            .collect();
+        eprintln!("[Session] received game packet counts: {}", counts.join(", "));
         self.note(format!("failed: {why}"));
         self.phase = Phase::Failed(why);
     }
@@ -617,7 +627,9 @@ impl Session {
     }
 
     fn handle(&mut self, p: &[u8]) {
-        match p[0] {
+        let Some(&kind) = p.first() else { return };
+        self.received_packet_types[kind as usize] = self.received_packet_types[kind as usize].saturating_add(1);
+        match kind {
             0x0A => {
                 let code = p.get(1).copied().unwrap_or(0xFF);
                 let text = LOGIN_RESPONSES.get(code as usize).copied().unwrap_or("unknown");
@@ -638,6 +650,7 @@ impl Session {
             0x02 => {
                 self.joined = true;
                 self.phase = Phase::InArena;
+                eprintln!("[Session] joined arena");
                 self.note("joined arena".into());
                 self.try_answer_security();
             }
@@ -817,6 +830,7 @@ impl Session {
             0x0F => match ArenaSettings::from_packet(p) {
                 Some(s) => {
                     self.settings = Some(Arc::new(s));
+                    eprintln!("[Session] received arena settings");
                     self.note("received arena settings".into());
                     self.try_answer_security();
                 }
@@ -849,6 +863,7 @@ impl Session {
                 }
                 let key = u32_at(p, 13).unwrap_or(0);
                 if key != 0 {
+                    eprintln!("[Session] received map/settings security request");
                     self.pending_security_key = Some(key);
                     self.try_answer_security();
                 }
@@ -872,6 +887,7 @@ impl Session {
                 return;
             }
         }
+        eprintln!("[Session] requesting map download");
         self.note(format!("downloading map {name}"));
         self.transport.send_reliable(&[0x0C]);
     }
@@ -896,6 +912,7 @@ impl Session {
     fn load_map(&mut self, data: &[u8]) {
         match Map::parse(data) {
             Ok(m) => {
+                eprintln!("[Session] map loaded");
                 self.map = Some(Arc::new(m));
                 self.try_answer_security();
             }
@@ -923,6 +940,7 @@ impl Session {
         self.transport.send_reliable(&p);
         self.pending_security_key = None;
         self.security_replies += 1;
+        eprintln!("[Session] sent map/settings security reply (executable checksum unspecified)");
     }
 
     fn accept_timestamp(pl: &mut Player, ts: u16) -> bool {
