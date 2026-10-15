@@ -8,6 +8,7 @@
 //!          flags = collect dropped flags first (then chase),
 //!          ball = fetch the free powerball, carry it to the chase target and throw it (warp key),
 //!          arena:NAME = join that arena,
+//!          attach:NAME = attach to that player as a turret ~3 s after getting a ship,
 //!          watch = report the chase target but don't move,
 //!          freq:N = switch to team N after getting a ship
 
@@ -53,6 +54,8 @@ fn main() {
     let bomb = modes.contains(&"bomb");
     let want_flags = modes.contains(&"flags");
     let want_ball = modes.contains(&"ball");
+    let mut attach_to = modes.iter().find_map(|m| m.strip_prefix("attach:")).map(str::to_string);
+    let mut attach_at: Option<Instant> = None;
     let mut next_shot = Instant::now();
     let mut next_report = Instant::now() + Duration::from_secs(2);
     let mut next_chat = Instant::now() + Duration::from_secs(3);
@@ -72,6 +75,15 @@ fn main() {
             freq_sent = true;
             if let Some(s) = game.session.as_mut() {
                 s.request_freq(f);
+            }
+        }
+        if let (Some(name), true) = (attach_to.clone(), game.alive()) {
+            let when = *attach_at.get_or_insert(Instant::now() + Duration::from_secs(3));
+            let pid = game.session.as_ref().and_then(|s| s.players.values().find(|p| p.name == name).map(|p| p.pid));
+            if let (true, Some(pid)) = (Instant::now() >= when, pid) {
+                game.request_attach(Some(pid));
+                println!("{name}: attach requested; notices {:?}", game.center_messages.last().map(|m| m.text.clone()));
+                attach_to = None;
             }
         }
         if let (Some(target), true) = (&chase, Instant::now() >= next_report) {

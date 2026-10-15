@@ -499,6 +499,15 @@ impl Hud {
     }
 }
 
+/// F2's "R" column. Continuum's formula isn't published; this fits 8 of 11 samples measured
+/// from the original (others off by 1-4): round(sum of victims' bounties / 10) + (W - 1) - L.
+fn rating(p: &aicontinuum::net::session::Player) -> i32 {
+    if p.wins == 0 {
+        return 0;
+    }
+    (p.kill_bounty_sum as f32 / 10.0).round() as i32 + p.wins as i32 - 1 - p.losses as i32
+}
+
 /// Low-energy warning colour: dark red below a quarter, yellow below half, else none.
 fn energy_color(energy: u32, full: u32) -> Option<TextColor> {
     if energy * 4 < full {
@@ -704,7 +713,7 @@ pub fn draw_statbox(hud: &Hud, game: &Game, view: u8) {
                             (133.0, c, false, p.squad.chars().take(10).collect()),
                             (253.0, c, true, p.wins.to_string()),
                             (293.0, c, true, p.losses.to_string()),
-                            (333.0, c, true, "0".into()),
+                            (333.0, c, true, rating(p).to_string()),
                             (381.0, c, true, format!("{ave:.1}")),
                         ],
                     }
