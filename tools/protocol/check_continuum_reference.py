@@ -23,6 +23,16 @@ def main():
             raise ValueError(f"synthetic vector {count} does not match")
         count += 1
     print(f"Passed {count} synthetic reference vectors.")
+    identities = vectors.with_name("identity-vectors.txt")
+    count = 0
+    for line in identities.read_text().splitlines():
+        if not line or line.startswith("#"):
+            continue
+        nonce, expected, _, _ = line.split()
+        if expand(image, int(nonce, 16), identity=True) != bytes.fromhex(expected):
+            raise ValueError(f"identity table vector {count} does not match")
+        count += 1
+    print(f"Passed {count} synthetic identity-table vectors.")
     if args.server_cache:
         cache = args.server_cache.read_bytes()
         if len(cache) != 4 + 2048 * 84 or cache[:4] != bytes.fromhex("28000100"):

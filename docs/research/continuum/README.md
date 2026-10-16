@@ -14,9 +14,10 @@ adapter.** `Session::connect_continuum` sends the 165-byte login and the CLI acc
 `--continuum-expander /path/to/helper`. The adapter expands arbitrary key2 values
 locally by emulating a pinned original-code image. It is **not a standalone Rust
 rewrite** of expansion, and the original-code image is not bundled or committed.
-Default connections still use VIE. Executable integrity responses and billing
-identity generation are not implemented; compatibility with all public zones is
-not established.
+Default connections still use VIE. A tested [billing identity codec](IDENTITY.md)
+is available, but native identity collection and launcher integration remain
+unimplemented. Executable integrity responses are also unimplemented;
+compatibility with all public zones is not established.
 
 The public nullspace cipher was ported under MIT, with its license included here.
 REA/Ghidra observations were used to corroborate the transport structure; no

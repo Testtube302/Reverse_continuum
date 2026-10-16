@@ -1,5 +1,6 @@
 //! Optional local expansion helper. No shell or network service is used.
 //! Protocol: decimal key2 argument; exactly 80 binary bytes on stdout.
+//! Identity expansion adds `--identity` and requires a supporting helper.
 use std::io::{self, Read};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -15,8 +16,22 @@ impl CommandExpander {
     }
 
     pub fn expand(&mut self, seed: u32) -> io::Result<[u32; 20]> {
-        let mut child = Command::new(&self.program)
-            .arg(seed.to_string())
+        self.run(seed, false)
+    }
+
+    /// Requires a helper supporting the explicit `--identity` mode. Never fall
+    /// back to the session expansion: its extra stage produces a different key.
+    pub fn expand_identity(&mut self, nonce: u32) -> io::Result<[u32; 20]> {
+        self.run(nonce, true)
+    }
+
+    fn run(&self, seed: u32, identity: bool) -> io::Result<[u32; 20]> {
+        let mut command = Command::new(&self.program);
+        command.arg(seed.to_string());
+        if identity {
+            command.arg("--identity");
+        }
+        let mut child = command
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())

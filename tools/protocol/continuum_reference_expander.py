@@ -24,7 +24,7 @@ RETURN = 0x1001000
 CATCH_RETURN = RETURN + 16
 
 
-def expand(image, seed):
+def expand(image, seed, *, identity=False):
     if len(image) != SIZE or hashlib.sha256(image).hexdigest() != IMAGE_SHA256:
         raise ValueError("reference image identity does not match the verified build")
     if not 0 <= seed <= 0xFFFFFFFF:
@@ -86,7 +86,9 @@ def expand(image, seed):
 
     emu.hook_add(UC_HOOK_CODE, handle_exception, begin=0x46CA73, end=0x46CA73)
     emu.hook_add(UC_HOOK_CODE, handle_exception, begin=CATCH_RETURN, end=CATCH_RETURN)
-    for entry in (0x457D60, 0x458BE0):
+    # Login identification uses the first stage only. Session key2 expansion
+    # includes the second stage; these tables are not interchangeable.
+    for entry in ((0x457D60,) if identity else (0x457D60, 0x458BE0)):
         emu.mem_write(stack, pack(RETURN) + pack(seed))
         emu.reg_write(UC_X86_REG_ESP, stack)
         emu.reg_write(UC_X86_REG_ECX, obj)
@@ -98,10 +100,10 @@ def expand(image, seed):
 
 def main():
     try:
-        if len(sys.argv) != 2:
-            raise ValueError("usage: continuum_reference_expander.py <decimal-key2>")
+        if len(sys.argv) not in (2, 3) or (len(sys.argv) == 3 and sys.argv[2] != "--identity"):
+            raise ValueError("usage: continuum_reference_expander.py <decimal-seed> [--identity]")
         image = Path(os.environ["AICONTINUUM_RUNTIME_CODE"]).read_bytes()
-        result = expand(image, int(sys.argv[1], 10))
+        result = expand(image, int(sys.argv[1], 10), identity=len(sys.argv) == 3)
         sys.stdout.buffer.write(result)
     except (KeyError, OSError, ValueError, UcError) as error:
         print(f"Continuum reference expansion failed: {error}", file=sys.stderr)

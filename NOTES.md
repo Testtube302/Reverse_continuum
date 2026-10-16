@@ -643,3 +643,30 @@
   SS.NET BillingUdp.cs forwards both fields; public TCP billing documentation
   distinguishes macid/contid (https://wiki.minegoboom.com/index.php/TCP_Billing_Protocol).
   No public test, reference-client execution, or desktop binary change this follow-up.
+
+- Recovered the 64-byte login billing-field framing locally: clear nonce u32,
+  encrypted checksum u32 and fourteen encrypted information u32s. Checksum is
+  the uncomplemented CRC32 of all 64 plaintext bytes with checksum zero, XOR
+  nonce. Identity table uses reference 0x457d60 only; the session expansion's
+  0x458be0 stage is omitted. Raw transform encrypts bytes 4..63 without packet
+  CRC8/escaping. Added a Rust codec and explicit reference-helper --identity mode.
+- New Rust decoding and byte-exact re-encoding pass all three existing original
+  captures, with independent Python plaintext comparison in memory. All fourteen
+  plaintext words are stable across those captures. No actual values retained in
+  source/logs or substituted into the client. Original CRC/encrypt/decrypt routines
+  generated 24 synthetic fixtures; Rust matches every output and rejects one-bit
+  corruption at every byte position, wrong lengths and an incorrect key table.
+  Existing 32 session expansion fixtures and 24 identity-table fixtures pass.
+- Traced field source categories: legacy BIOS/device checksums, filtered registry
+  values (lowercase-name CRC identifies RegisteredOwner, RegisteredOrganization,
+  ProductId and Identifier), RAS connection data, two OS string CRCs, and a selected
+  Windows-directory entry creation timestamp. Registry ancestor filters, some
+  selectors and OS API-name confirmation remain unresolved. Separate login machine
+  word comes from volume serial lookup, not the current account-name CRC.
+  Detailed measured mappings and uncertainty: docs/research/continuum/IDENTITY.md.
+- Full validation: 91 unit +15 synthetic UDP tests pass, one unit ignored;
+  default asset/live-server tests remain opt-in. Clippy and release build pass
+  with existing warnings, none in the changed codec/helper modules. No new public
+  test or running reference client; analysis/emulation used existing local inputs.
+  Native macOS collection/mapping is still missing. Codec is not enabled in the
+  launcher and does not yet change the login packet or establish an SSC fix.

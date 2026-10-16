@@ -87,7 +87,7 @@ impl ContinuumCipher {
         Ok(data[1..].to_vec())
     }
 
-    fn transform(&self, data: &mut [u8], decrypt: bool) {
+    pub(super) fn transform(&self, data: &mut [u8], decrypt: bool) {
         let (mut lower, mut upper) = (0u32, 0u32);
         let mut offset = 0;
         while offset + 8 <= data.len() {

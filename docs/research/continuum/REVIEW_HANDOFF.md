@@ -28,6 +28,9 @@ requires the explicit `--continuum-expander` option.
   subsequent key-expansion challenge responses.
 - Optional server-owned `scrty1` parser and local command-provider interface.
 - Python reference adapter, pinned Unicorn dependency and validation script.
+- Billing identity codec and 24 synthetic original-routine vectors; see
+  [field sources and remaining collector work](IDENTITY.md). This does not yet
+  change the launcher or resolve the SSC restriction.
 - Public-reference cipher/finalization vectors and synthetic expansion vectors.
 - Eight synthetic UDP integration tests, examples, and investigation notes.
 
