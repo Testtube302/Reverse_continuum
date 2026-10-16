@@ -457,7 +457,9 @@ impl Transport {
                 eprintln!("[Continuum] received session key challenge ({} bytes)", pkt.len());
                 if let Some(cont) = self.continuum.as_mut() {
                     if let Some(table) = (cont.expand)(seed) {
-                        let mut response = vec![0, 0x13];
+                        // Original 0.40 capture and TWCore protocol docs: the
+                        // response has a u16 version before the seed (88 bytes).
+                        let mut response = vec![0, 0x13, 0, 0];
                         response.extend_from_slice(&seed.to_le_bytes());
                         for word in table {
                             response.extend_from_slice(&word.to_le_bytes());

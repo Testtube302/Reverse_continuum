@@ -281,8 +281,8 @@ fn answers_encrypted_expansion_challenge_without_changing_session_key() {
         .unwrap();
     assert!(settle(&mut client).is_empty());
     let response = cipher.decrypt(&receive(&server)).unwrap();
-    assert_eq!(&response[..6], &[0, 0x13, 123, 0, 0, 0]);
-    assert_eq!(&response[6..], &[1, 0xef, 0xcd, 0xab].repeat(20));
+    assert_eq!(&response[..8], &[0, 0x13, 0, 0, 123, 0, 0, 0]);
+    assert_eq!(&response[8..], &[1, 0xef, 0xcd, 0xab].repeat(20));
     // The public reference reads the seed and permits trailing bytes. Exercise
     // direct and clustered padded challenges, as well as the minimum form above.
     for request in [
@@ -292,8 +292,8 @@ fn answers_encrypted_expansion_challenge_without_changing_session_key() {
         server.send_to(&cipher.encrypt(&request).unwrap(), addr).unwrap();
         assert!(settle(&mut client).is_empty());
         let response = cipher.decrypt(&receive(&server)).unwrap();
-        assert_eq!(&response[..6], &[0, 0x13, 123, 0, 0, 0]);
-        assert_eq!(&response[6..], &[1, 0xef, 0xcd, 0xab].repeat(20));
+        assert_eq!(&response[..8], &[0, 0x13, 0, 0, 123, 0, 0, 0]);
+        assert_eq!(&response[8..], &[1, 0xef, 0xcd, 0xab].repeat(20));
     }
     server
         .send_to(&cipher.encrypt(&[0, 0x12, 123]).unwrap(), addr)
@@ -345,6 +345,11 @@ fn session_uses_continuum_login_layout_only_after_encrypted_ack() {
     assert_eq!(&login[..2], &[0x24, 0]);
     assert_eq!(&login[2..15], b"SyntheticCont");
     assert_eq!(&login[75..77], &40u16.to_le_bytes());
+    // Original 0.40 and SS.NET LoginPacket: IPv4 numeric value in LE order,
+    // followed by the client's actual bound port, login ID, and reserved word.
+    assert_eq!(&login[89..93], &[1, 0, 0, 127]);
+    assert_eq!(&login[93..95], &addr.port().to_le_bytes());
+    assert_eq!(&login[95..101], &[0; 6]);
     assert_eq!(&login[101..], &[0x5a; 64]);
     session.disconnect();
 }
@@ -566,8 +571,8 @@ fn large_encrypted_download_crosses_multiple_ack_windows() {
             server.send_to(&cipher.encrypt(&challenge).unwrap(), addr).unwrap();
             assert!(settle(&mut client).is_empty());
             let reply = cipher.decrypt(&receive(&server)).unwrap();
-            assert_eq!(&reply[..6], &[0, 0x13, 123, 0, 0, 0]);
-            assert_eq!(&reply[6..], &[0; 80]);
+            assert_eq!(&reply[..8], &[0, 0x13, 0, 0, 123, 0, 0, 0]);
+            assert_eq!(&reply[8..], &[0; 80]);
         }
     }
 }

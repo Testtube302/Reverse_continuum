@@ -486,10 +486,17 @@ impl Session {
         p.extend_from_slice(&444u16.to_le_bytes());
         p.extend_from_slice(&0u16.to_le_bytes()); // no optional client features
         p.extend_from_slice(&[0; 8]);
-        p.extend_from_slice(&[0; 4]); // remote ip (unused)
-        let port = self.transport.local_addr().map(|a| a.port()).unwrap_or(0) as u32;
+        // Original 0.40 and SS.NET LoginPacket report the actual destination,
+        // encoded as a little-endian IPv4 numeric value (zero for IPv6).
+        let remote_ip = match self.config.server.ip() {
+            std::net::IpAddr::V4(ip) => u32::from(ip),
+            std::net::IpAddr::V6(_) => 0,
+        };
+        p.extend_from_slice(&remote_ip.to_le_bytes());
+        let port = self.transport.local_addr().map(|a| a.port()).unwrap_or(0);
         p.extend_from_slice(&port.to_le_bytes());
-        p.extend_from_slice(&[0; 4]);
+        p.extend_from_slice(&[0; 4]); // login ID (no zone redirect)
+        p.extend_from_slice(&[0; 2]); // reserved
         debug_assert_eq!(p.len(), 101);
         if let Some(identity) = self.continuum_id {
             p.extend_from_slice(&identity);

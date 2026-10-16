@@ -539,3 +539,53 @@
   default. Clippy succeeds with existing warnings; release build succeeds. Actual
   localhost Continuum login/map/settings and 10-second hold with one security reply
   pass after the fix.
+
+- One explicitly approved public AIContinuum test on 130f459 still disconnected
+  at +718 ms after 9,120/97,357 map bytes. Login OK, questionnaire not requested,
+  and the trace confirms a 27-byte arena request. The arena-length correction is
+  not sufficient to resolve Trench Wars. No further AIContinuum public test is
+  authorized by that single-test approval.
+- Repeated the previously authorized original-client comparison using direct UDP
+  from the reference host through a destination-restricted bridge, removing SSH
+  from the game transport. Original 0.40 on Wine 5.5 successfully loaded Trench
+  Wars with the currently selected saved account. Its 139-byte encryption ack,
+  login 0 and no-questionnaire flag match AIContinuum. Captured 2,313 encrypted
+  packets decoded without rejection; every outgoing original packet re-encrypts
+  byte-for-byte. The original sends individual immediate reliable acknowledgements;
+  AIContinuum batches them. This remains a hypothesis for the disconnect.
+  Approval review rejected a temporary plaintext password file; instead entered
+  credentials over SSH stdin directly into the masked UI, with Save unchecked.
+  No password file was created. Client stopped, original profile/zone files restored,
+  bounded bridge exited, remote capture/script removed. Private capture remains
+  local outside Git. Separate isolated legacy-server trials did not open their port
+  under either existing Wine runtime; their processes were stopped.
+- Independent expansion-reply correction: original 0.40 sends core 0x13 as
+  `[00 13][version u16=0][seed u32][20 u32 words]` (88 bytes), corroborated by
+  https://www.twcore.org/SubspaceProtocol/ . The public nullspace implementation
+  omitted the version, and our original port inherited its 86-byte layout. Verified
+  all 20 captured reference words against the existing expansion helper without
+  retaining keys in logs. Updated direct/padded/clustered challenge tests; pre-fix
+  regression failed, corrected 88-byte reply passes. This is NOT the immediate
+  disconnect cause: the failing public trace contains no 0x12 challenge.
+
+- A second separately approved public AIContinuum experiment sent each reliable ACK
+  immediately instead of batching. Local map/settings entry and a 30-second hold
+  passed first. Trench Wars still sent core 07 at +1,095 ms after 2,400/97,357 map
+  bytes, login OK, no questionnaire, no missing outgoing ACKs or pending security
+  challenge. Immediate ACKs alone do not resolve this failure; the experimental
+  transport stays outside the repository and desktop build. Both one-test public
+  approvals have now been consumed.
+- Found another measured login discrepancy: offset 89 was zero despite being the
+  destination IPv4 field. Original direct-reference capture reports 127.0.0.1 as
+  numeric 0x7f000001 in little-endian order, matching the bridge destination.
+  SS.NET LoginPacket.ServerIPv4Address documents the field; Network.GetProxyUsage
+  classifies a zero address or bound port as SOCKS5, so it is not universally unused.
+  Now report the configured destination IPv4 and actual bound port; explicitly
+  encode the u16 port, zero redirect login ID and reserved u16. IPv6 has no legacy
+  IPv4 representation and retains zero. A loopback wire regression reproduced the
+  zero-address mismatch before the fix. No borrowed identity or integrity value
+  was substituted. Whether Trench Wars acts on this field is not established.
+  Validation after both layout corrections: 84 unit and 14 synthetic UDP tests
+  pass (one unit ignored); opt-in asset/live-server tests skip by default. Clippy
+  and release build pass with existing warnings. Actual local Continuum login,
+  map/settings entry and a 30-second hold pass (zero security replies in this run).

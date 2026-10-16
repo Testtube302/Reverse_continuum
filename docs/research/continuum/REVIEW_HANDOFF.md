@@ -3,13 +3,13 @@
 ## Checkout and scope
 
 Repository: https://github.com/Testtube302/Reverse_continuum
-Branch: `codex/continuum-handshake-investigation`
-Implementation commit: `3ed810e7f0c5324059f15e199ddb049f5db9e95a`.
+Current compatibility branch: `codex/continuum-ack-compatibility`
+Original implementation commit: `3ed810e7f0c5324059f15e199ddb049f5db9e95a`.
 Later commits may improve this handoff without changing that implementation.
 
 ```sh
 git fetch origin
-git switch --track origin/codex/continuum-handshake-investigation
+git switch --track origin/codex/continuum-ack-compatibility
 # If the local branch already exists, switch to it instead.
 cargo test
 cargo clippy --all-targets
@@ -102,7 +102,7 @@ in the CLI path; the executable checksum remains zero. Strict servers may reject
 
 ## Suggested prompt for Claude
 
-> Review `codex/continuum-handshake-investigation` in Testtube302/Reverse_continuum.
+> Review `codex/continuum-ack-compatibility` in Testtube302/Reverse_continuum.
 > Read docs/research/continuum/REVIEW_HANDOFF.md, the investigation README and NOTES.md.
 > Inspect the implementation, identify production blockers, and make justified fixes
 > on a separate review branch. Verify tests and supported builds. Treat the local
@@ -155,3 +155,32 @@ verify both layouts, and pass local encrypted login/map entry. The reference
 captures also verified byte-for-byte encryption agreement for outgoing original
 client packets. Captures remain local, outside Git. Public-server success is still
 unverified; do not represent this packet correction as a confirmed Trench Wars fix.
+
+### Successful original-client comparison and remaining disconnect (2026-10-16)
+
+Original 0.40 on Wine 5.5 successfully entered Trench Wars using the currently
+selected saved account over direct UDP from the reference host. The previous
+UDP-over-SSH comparison added a transport variable and failed during download.
+All 2,313 captured encrypted datagrams decoded; every outgoing original packet
+re-encrypted byte-for-byte. Captures and credentials remain outside Git.
+
+Two explicitly approved AIContinuum public tests still failed after login during
+map download: the 27-byte arena correction alone, then a scratch build with
+immediate individual ACKs. The ACK experiment is not included. Neither trace
+received an expansion challenge or requested the questionnaire. Public tests are
+bounded by individual approvals; both approvals were consumed.
+
+Further confirmed layout corrections in this branch:
+
+- Core 0x13 includes a zero u16 version before the seed and 20 words (88 bytes).
+  Verified all reference response words against the expansion helper; this fixes
+  a separate bug, not the immediate disconnect seen without a challenge.
+- Login offset 89 reports the actual destination IPv4 in little-endian numeric
+  order. The previous zero can be classified as SOCKS5 by SS.NET; Trench Wars'
+  treatment of the field is unknown. The bound port, zero redirect login ID and
+  reserved word retain their protocol offsets. No client identity is borrowed.
+
+The cipher comparison establishes agreement for captured packets, not complete
+server acceptance. Login sequencing/timing, host/network differences and billing
+identity remain possible factors. Do not label the build production-ready or the
+Trench Wars issue resolved without a successful AIContinuum arena-entry test.
