@@ -601,11 +601,18 @@ impl Session {
     }
 
     pub fn send_public_chat(&mut self, text: &str) {
+        let Some(pid) = self.pid.filter(|_| self.ready()) else { return };
+        if text.is_empty() {
+            return;
+        }
         let mut p = vec![0x06, 0x02, 0x00];
         p.extend_from_slice(&0u16.to_le_bytes());
         p.extend(text.bytes().take(240));
         p.push(0);
         self.transport.send_reliable(&p);
+        // Servers forward public chat to other players, not its sender. Display
+        // the same bounded wire text locally (also covers keyboard macros).
+        self.chat.push(Chat { kind: 2, pid, text: cstr(&p[5..]) });
     }
 
     /// Sends our position if due. `ship` is None while spectating. A non-empty `weapon` is

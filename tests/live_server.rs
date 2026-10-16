@@ -178,6 +178,31 @@ fn two_clients_see_each_other_fly() {
     b.disconnect();
 }
 
+#[test]
+fn public_chat_is_delivered_and_shown_once_to_the_sender() {
+    if server().is_none() {
+        return;
+    }
+    let mut sender = connect(config("AIC-ChatSend")).unwrap();
+    let mut receiver = connect(config("AIC-ChatRecv")).unwrap();
+    assert!(pump_until(&mut [&mut sender, &mut receiver], 15, |s| s.iter().all(|s| s.ready())));
+    let pid = sender.pid.unwrap();
+    let message = "Local chat delivery regression";
+    sender.send_public_chat(message);
+    let delivered = pump_until(&mut [&mut sender, &mut receiver], 5, |s| {
+        s[1].chat.iter().any(|c| c.kind == 2 && c.pid == pid && c.text == message)
+    });
+    // Allow a server echo, if any, to arrive before checking for duplication.
+    pump_until(&mut [&mut sender, &mut receiver], 1, |_| false);
+    let count = |s: &Session| s.chat.iter().filter(|c| c.kind == 2 && c.pid == pid && c.text == message).count();
+    let (shown, received) = (count(&sender), count(&receiver));
+    sender.disconnect();
+    receiver.disconnect();
+    assert!(delivered, "public message did not reach the other local client");
+    assert_eq!(received, 1, "receiver should show one copy");
+    assert_eq!(shown, 1, "sender must show its own message locally");
+}
+
 /// Full combat round trip: B shoots A until A's client registers the damage, dies and tells
 /// the server, and the server announces the kill back to B.
 #[test]

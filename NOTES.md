@@ -708,3 +708,19 @@
   untouched. Local GUI ship entry and local combat passed, while the public test
   deliberately did not fire. Remaining production limitations include private
   reference-image expansion and an unimplemented Windows native collector.
+
+- Outgoing public chat (2026-10-16): reproduced with two dummy clients on local
+  SS.NET using Continuum/native identification. Recipient received exactly one
+  message; sender displayed zero because send_public_chat never appended to chat.
+  Open-source nullspace ChatController::SendInput likewise displays its own sent
+  message after reliable transmission (src/null/ChatController.cpp,
+  https://github.com/plushmonkey/nullspace). Added local sender display using our
+  player ID and the actual bounded/NUL-terminated wire text; macros share this
+  path. Empty/pre-arena calls do not create local entries.
+- Regression failed before the fix and passes after it: recipient and sender each
+  show exactly one copy, including a wait for possible duplicate server echo.
+  Synthetic loopback test checks public packet layout, sender ID, empty/pre-arena
+  behavior and 240-byte/NUL display boundaries. Full offline suite passes (92 unit,
+  15 transport, 1 chat; one ignored unit; unconfigured live/assets checks skip).
+  Actual two-client local Continuum chat test passes. Clippy and release build
+  pass with existing warnings. No public-server message or additional public test.
