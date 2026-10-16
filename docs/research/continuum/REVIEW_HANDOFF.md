@@ -141,3 +141,17 @@ account. This is not proof that registration explains the AIContinuum account's
 disconnect: old traces omitted the flag. The next owner-run attempt can distinguish
 this condition. Sources: public nullspace `Connection.cpp` PasswordResponse and
 SS.NET `S2C_LoginResponse.cs` / `IAuth.cs`, with revisions recorded in NOTES.md.
+
+### Arena-entry layout correction (2026-10-16)
+
+The owner's 11:16:20 trace explicitly says questionnaire **not requested**, yet
+disconnects at +733 ms after successful login during map transfer. Questionnaire
+handling is not the blocker in that attempt.
+
+New local captures of original 0.40 confirm its 27-byte arena-entry packet, while
+AIContinuum sent the 26-byte VIE form. Continuum now appends byte 26 with optional
+graphics disabled; VIE stays unchanged. Tests reproduce the previous mismatch,
+verify both layouts, and pass local encrypted login/map entry. The reference
+captures also verified byte-for-byte encryption agreement for outgoing original
+client packets. Captures remain local, outside Git. Public-server success is still
+unverified; do not represent this packet correction as a confirmed Trench Wars fix.

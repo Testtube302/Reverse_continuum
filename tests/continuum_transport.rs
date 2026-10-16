@@ -406,14 +406,50 @@ fn continuum_session_requests_map_with_file_index() {
     std::thread::sleep(Duration::from_millis(20));
     client.update();
     let mut found = false;
+    let mut found_arena = false;
     for _ in 0..3 {
         let packet = cipher.decrypt(&receive(&server)).unwrap();
+        if packet.starts_with(&[0, 3]) && packet.get(6) == Some(&0x01) {
+            let arena = &packet[6..];
+            assert_eq!(arena.len(), 27, "Continuum arena entry includes optional graphics byte");
+            assert_eq!(arena[26], 0, "optional LVZ downloads are not implemented");
+            found_arena = true;
+        }
         if packet.starts_with(&[0, 3]) && packet.get(6) == Some(&0x0c) {
             assert_eq!(&packet[6..], &[0x0c, 0, 0]);
             found = true;
         }
     }
     assert!(found, "missing indexed Continuum map request");
+    assert!(found_arena, "missing Continuum arena entry");
+}
+
+#[test]
+fn vie_arena_entry_keeps_the_26_byte_layout() {
+    use aicontinuum::net::session::{Config, Session};
+    let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+    server.set_read_timeout(Some(Duration::from_millis(500))).unwrap();
+    let mut client = Session::connect(Config {
+        server: server.local_addr().unwrap(), name: "fixture".into(), password: "fixture".into(),
+        arena: None, map_dir: std::env::temp_dir().join("aic-vie-arena-fixture"),
+    }).unwrap();
+    let mut buf = [0; 2048];
+    let (_, addr) = server.recv_from(&mut buf).unwrap();
+    let mut ack = vec![0, 2];
+    ack.extend_from_slice(&buf[2..6]); // echoed VIE key disables encryption
+    server.send_to(&ack, addr).unwrap();
+    std::thread::sleep(Duration::from_millis(20));
+    client.update();
+    for _ in 0..2 { receive(&server); } // sync and login
+    server.send_to(&[0, 3, 0, 0, 0, 0, 0x0a, 0], addr).unwrap();
+    std::thread::sleep(Duration::from_millis(20));
+    client.update();
+    assert_eq!(&receive(&server)[..2], &[0, 4]);
+    let packet = receive(&server);
+    assert_eq!(&packet[..2], &[0, 3]);
+    assert_eq!(&packet[6..8], &[1, 8]);
+    assert_eq!(packet[6..].len(), 26);
+    client.disconnect();
 }
 
 #[test]

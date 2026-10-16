@@ -509,6 +509,11 @@ impl Session {
         p.extend_from_slice(&768u16.to_le_bytes());
         p.extend_from_slice(&number.to_le_bytes());
         p.extend(fixed_str(&name, 16));
+        if self.continuum_id.is_some() {
+            // Continuum 0.40 capture and SS.NET C2S_GoArenaContinuum: byte 26
+            // selects optional LVZ downloads. We currently load only the map.
+            p.push(0);
+        }
         self.transport.send_reliable(&p);
         self.phase = Phase::EnteringArena;
         self.joined = false;

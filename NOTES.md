@@ -514,3 +514,28 @@
   server tests skip without configuration. Clippy succeeds with existing warnings.
   Earlier public traces did not retain byte 19, so questionnaire causality is still
   unconfirmed. No public-server test performed for this change.
+
+- Owner retry 2026-10-16 11:16:20 on c521a9a: login 0/OK, questionnaire flag
+  explicitly NOT requested, joined/settings received, map 6,720/97,357 bytes,
+  encrypted core 07 disconnect at +733 ms. No unacked outgoing requests or buffered
+  incoming reliable packets. This attempt rules out the questionnaire request as
+  the immediate blocker; the server still supplies no reason in its disconnect.
+- Original 0.40 local reference comparison after Tailscale reauthentication:
+  captured only localhost UDP 5000 in the isolated VM, with the dummy local profile.
+  Two captures include cached-map entry and a fresh download (temporarily moved
+  and then restored its cached local map). Rust cipher decoded 76 and 188 encrypted
+  datagrams respectively without rejecting any; re-encrypting every decoded client
+  datagram reproduced the captured wire bytes exactly. No original/client payloads,
+  keys or packet captures are committed. Original client stopped after testing.
+- Confirmed arena-entry layout discrepancy: original C2S 01 is 27 bytes, including
+  optional-graphics flag at byte 26. AIContinuum used the 26-byte VIE layout for both
+  protocols. Public nullspace SendArenaLogin and SS.NET C2S_GoArenaContinuum corroborate
+  the capture. Added the byte only for Continuum, set to 0 because optional LVZ
+  downloads are not implemented. VIE remains 26 bytes. A regression failed on the
+  old implementation and now passes; added a VIE wire-layout regression. SS.NET
+  accepts both layouts, explaining why prior local tests missed the discrepancy,
+  but Trench Wars causality still requires verification.
+  Full suite: 84 unit + 14 synthetic UDP pass, one ignored; external tests skip by
+  default. Clippy succeeds with existing warnings; release build succeeds. Actual
+  localhost Continuum login/map/settings and 10-second hold with one security reply
+  pass after the fix.
