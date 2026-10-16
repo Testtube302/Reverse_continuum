@@ -2,8 +2,11 @@
 
 The 64-byte login field has a verified codec in
 `src/net/continuum_identity.rs`. The macOS launcher now uses it with the explicit
-native mapping described below. This is not yet a demonstrated fix for the SSC
-rejection; local interoperability does not establish public-server acceptance.
+native mapping described below. Build 46bc05e passed one separately authorized
+90-second Trench Wars test: arena entry, server-confirmed Warbird selection,
+brief movement and confirmed return to spectator, with no server disconnect.
+This resolves the previously observed failure for that test; it does not establish
+compatibility with every server or a fully standalone expansion implementation.
 
 The owner authorized analysis of the original client for this compatibility work.
 The findings below came from the pinned read-only image described in README.md,
@@ -73,7 +76,9 @@ legacy API's account-name CRC is not equivalent. The identified login API now
 accepts the native volume-derived machine word separately from the billing field.
 
 Native macOS does not provide these Windows registry paths or Windows directory
-metadata. The server-side reason for rejecting the previous client is unknown.
+metadata. The server-side rule that rejected the previous client is still unknown.
+The new build changes the encoded billing field, machine word and timezone
+together; the successful test does not isolate which change affected that rule.
 
 ## Native macOS mapping
 
@@ -139,4 +144,5 @@ AICONTINUUM_SERVER=127.0.0.1:5000 AICONTINUUM_TEST_EXPANDER=/path/to/expand carg
 
 For a future Windows collector, registry ancestor filters and the selected
 file/RAS inputs still need resolution. Public acceptance of the native Mac mapping
-needs a separately authorized test and cannot be inferred from codec correctness.
+has been demonstrated for the bounded test above; further public tests need new
+authorization. It cannot be inferred for other zones from codec correctness alone.

@@ -693,3 +693,18 @@
   90 seconds with two security replies. Release GUI joins a Warbird on loopback;
   screenshot shows the live ship, map and HUD. Clippy/release pass with existing
   warnings. No new public test yet; native mapping is not proven accepted by SSC.
+
+- Owner then authorized one 90-second test of 46bc05e at Trench Wars
+  207.148.16.165:5400 with the selected saved account, brief Warbird movement and
+  return to spectator, without firing. PASS: arena ready +347 ms; Warbird request
+  +20,348 ms, server confirmation +20,394 ms; movement observed; spectator return
+  confirmed. Connected through 90 seconds and disconnected normally. No earlier
+  SSC rejection appeared. This validates the combined native-identification build
+  for this bounded test; it does not identify the server's exact rejection rule
+  or prove all-zone compatibility. Approval consumed; no additional public test.
+  Private metadata log stays outside Git; no account/identity values published.
+- Desktop updated to 46bc05e with saved settings unchanged and rollback at
+  .continuum/before-native-identity-20261016-124737. Review branch pushed; main
+  untouched. Local GUI ship entry and local combat passed, while the public test
+  deliberately did not fire. Remaining production limitations include private
+  reference-image expansion and an unimplemented Windows native collector.

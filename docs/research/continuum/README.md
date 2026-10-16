@@ -20,6 +20,10 @@ user/host information and a volume-derived machine word. Windows-only fields
 remain unavailable. Executable integrity responses are unimplemented;
 compatibility with all public zones is not established.
 
+Build `46bc05e` subsequently passed an owner-authorized 90-second Trench Wars
+test with arena entry, server-confirmed Warbird selection, brief movement and
+confirmed return to spectator. See [the recorded test and limits](REVIEW_HANDOFF.md).
+
 The public nullspace cipher was ported under MIT, with its license included here.
 REA/Ghidra observations were used to corroborate the transport structure; no
 proprietary binary or decompiled source is committed.

@@ -30,7 +30,7 @@ requires the explicit `--continuum-expander` option.
 - Python reference adapter, pinned Unicorn dependency and validation script.
 - Billing identity codec, 24 synthetic original-routine vectors and a native macOS
   collector integrated into the launcher; see [field sources and mapping](IDENTITY.md).
-  Public acceptance is unverified; the SSC restriction is not yet resolved.
+  Build 46bc05e passed the bounded Trench Wars gameplay check described below.
 - Public-reference cipher/finalization vectors and synthetic expansion vectors.
 - Eight synthetic UDP integration tests, examples, and investigation notes.
 
@@ -249,9 +249,33 @@ specification also distinguishes macid and contid:
 https://wiki.minegoboom.com/index.php/TCP_Billing_Protocol
 This is evidence about protocol roles, not evidence of SSC's matching rule.
 
-Next bounded work: trace construction of the billing field in the isolated
-reference client against the local server, establish its inputs and session
-variation, and validate a legitimate implementation locally. Do not infer that
-any nonzero bytes suffice, replay captured identities, or claim a proven root
-cause from the missing field alone. Missing transport responses are a weaker
-current hypothesis because no additional challenge precedes the rejection.
+The subsequent codec and native collection work is documented in
+[IDENTITY.md](IDENTITY.md). Captured identities were not replayed, and no Windows
+registration information was invented for the Mac. The server's exact matching
+rule remains unknown.
+
+### Successful native Mac identification test (2026-10-16)
+
+Build `46bc05ef298bc700769099f9f1be58e30de9a3ab` is installed on the owner's desktop.
+The owner separately authorized one test at 207.148.16.165:5400 with the selected
+saved account for up to 90 seconds, including brief movement without firing.
+
+- Arena ready at +347 ms.
+- Warbird requested at +20,348 ms; server-confirmed at +20,394 ms.
+- Local movement observed while transmitting regular game position updates.
+- Return to spectator confirmed by the server.
+- Session stayed connected through 90 seconds, then the test disconnected normally.
+- No rejection or repeat of the earlier 15-second SSC notice in this attempt.
+
+The test uses the release library from the same build as the desktop executable.
+The actual GUI separately joined a Warbird on the loopback server. Local tests
+also verified two-client flight, firing/damage/kill reporting and a separate
+90-second hold with two security replies. No public firing/combat test was run.
+The single public-test approval is consumed; it is not permission for more tests.
+
+Rollback: the desktop installation manifest points to
+`.continuum/before-native-identity-20261016-124737`, containing the previous
+executable, helper, manifest and identity notes. Saved profiles, zone list, keys
+and macros were preserved. Main remains unchanged; review the compatibility
+branch before merging. The private runtime-image dependency and Windows collector
+remain production limitations.
