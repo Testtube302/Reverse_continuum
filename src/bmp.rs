@@ -1,5 +1,5 @@
-//! Decoder for the 8-bit Windows bitmaps SubSpace uses (`.bm2`, embedded LVL tilesets).
-//! Supports uncompressed (BI_RGB) and RLE8 (BI_RLE8) palettized images.
+//! Decoders for SubSpace bitmaps and embedded LVL tilesets.
+//! Supports 8-bit BI_RGB/BI_RLE8 and 24-bit BI_RGB without palette quantization.
 
 use std::fmt;
 
@@ -38,6 +38,63 @@ impl IndexedImage {
         }
         out
     }
+}
+
+/// A top-down RGB image, including tilesets with more than 256 distinct colors.
+#[derive(Clone, Debug)]
+pub struct RgbImage {
+    pub width: u32,
+    pub height: u32,
+    pub pixels: Vec<[u8; 3]>,
+}
+
+impl RgbImage {
+    pub fn to_rgba(&self, black_transparent: bool) -> Vec<u8> {
+        self.pixels.iter().flat_map(|&[r, g, b]| {
+            let a = if black_transparent && [r, g, b] == [0, 0, 0] { 0 } else { 255 };
+            [r, g, b, a]
+        }).collect()
+    }
+}
+
+/// Decode an indexed or true-color BMP while preserving every color.
+pub fn decode_rgb(data: &[u8]) -> Result<RgbImage, BmpError> {
+    if !data.starts_with(b"BM") { return err("missing BM signature"); }
+    if u16_at(data, 28)? != 24 {
+        let indexed = decode(data)?;
+        return Ok(RgbImage {
+            width: indexed.width,
+            height: indexed.height,
+            pixels: indexed.pixels.iter().map(|&i| indexed.palette[i as usize]).collect(),
+        });
+    }
+    let offset = u32_at(data, 10)? as usize;
+    let header_size = u32_at(data, 14)? as usize;
+    if header_size < 40 || header_size.checked_add(14).is_none_or(|end| end > offset) {
+        return err("invalid bitmap header or pixel offset");
+    }
+    if u16_at(data, 26)? != 1 || u32_at(data, 30)? != 0 {
+        return err("24-bit bitmap requires one plane and BI_RGB compression");
+    }
+    let width = u32_at(data, 18)? as i32;
+    let raw_height = u32_at(data, 22)? as i32;
+    if width <= 0 || raw_height == 0 { return err("bad dimensions"); }
+    let (w, h) = (width as usize, raw_height.unsigned_abs() as usize);
+    // Windows BMP stores BGR triplets in DWORD-aligned rows, bottom-up unless
+    // height is negative. Validate the complete source before allocating pixels.
+    let stride = w.checked_mul(3).and_then(|n| n.checked_add(3)).map(|n| n & !3)
+        .ok_or_else(|| BmpError("bitmap dimensions overflow".into()))?;
+    let end = stride.checked_mul(h).and_then(|n| offset.checked_add(n))
+        .ok_or_else(|| BmpError("bitmap dimensions overflow".into()))?;
+    let bits = data.get(offset..end).ok_or_else(|| BmpError("truncated pixel data".into()))?;
+    let mut pixels = Vec::with_capacity(w * h);
+    for y in 0..h {
+        let row = if raw_height < 0 { y } else { h - 1 - y };
+        for bgr in bits[row * stride..row * stride + w * 3].chunks_exact(3) {
+            pixels.push([bgr[2], bgr[1], bgr[0]]);
+        }
+    }
+    Ok(RgbImage { width: width as u32, height: h as u32, pixels })
 }
 
 fn u16_at(d: &[u8], o: usize) -> Result<u16, BmpError> {
@@ -228,5 +285,72 @@ mod tests {
         let img = IndexedImage { width: 2, height: 1, pixels: vec![0, 1], palette: vec![[0, 0, 0], [9, 8, 7]] };
         assert_eq!(img.to_rgba(true), vec![0, 0, 0, 0, 9, 8, 7, 255]);
         assert_eq!(img.to_rgba(false)[3], 255);
+    }
+
+    fn bmp24(width: i32, height: i32, bits: &[u8]) -> Vec<u8> {
+        let mut data = vec![0; 54];
+        data[..2].copy_from_slice(b"BM");
+        data[2..6].copy_from_slice(&(54 + bits.len() as u32).to_le_bytes());
+        data[10..14].copy_from_slice(&54u32.to_le_bytes());
+        data[14..18].copy_from_slice(&40u32.to_le_bytes());
+        data[18..22].copy_from_slice(&width.to_le_bytes());
+        data[22..26].copy_from_slice(&height.to_le_bytes());
+        data[26..28].copy_from_slice(&1u16.to_le_bytes());
+        data[28..30].copy_from_slice(&24u16.to_le_bytes());
+        data.extend_from_slice(bits);
+        data
+    }
+
+    #[test]
+    fn true_color_rows_padding_channels_and_transparency() {
+        let top = [0, 0, 0, 3, 2, 1, 0xcc, 0xcc];
+        let bottom = [6, 5, 4, 9, 8, 7, 0xdd, 0xdd];
+        for (height, bits) in [(2, [bottom, top].concat()), (-2, [top, bottom].concat())] {
+            let image = decode_rgb(&bmp24(2, height, &bits)).unwrap();
+            assert_eq!((image.width, image.height), (2, 2));
+            assert_eq!(image.pixels, [[0, 0, 0], [1, 2, 3], [4, 5, 6], [7, 8, 9]]);
+            assert_eq!(image.to_rgba(true), [0, 0, 0, 0, 1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255]);
+            assert_eq!(image.to_rgba(false)[3], 255);
+        }
+    }
+
+    #[test]
+    fn true_color_preserves_more_than_256_colors() {
+        let colors: Vec<_> = (0..257u32).map(|n| [(n >> 8) as u8, n as u8, 17]).collect();
+        let mut bits: Vec<_> = colors.iter().flat_map(|&[r, g, b]| [b, g, r]).collect();
+        bits.push(0); // 771 bytes rounded to DWORD stride 772.
+        assert_eq!(decode_rgb(&bmp24(257, -1, &bits)).unwrap().pixels, colors);
+    }
+
+    #[test]
+    fn true_color_rejects_truncated_or_invalid_bitmap() {
+        let good = bmp24(2, 2, &[0; 16]);
+        for len in 0..good.len() {
+            assert!(decode_rgb(&good[..len]).is_err(), "accepted truncated length {len}");
+        }
+        for (offset, value) in [(10, 20u32), (14, 12), (18, 0), (22, 0), (30, 1), (18, i32::MAX as u32)] {
+            let mut bad = good.clone();
+            bad[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+            assert!(decode_rgb(&bad).is_err());
+        }
+    }
+
+    #[test]
+    fn rgb_decoder_preserves_indexed_raw_and_rle8() {
+        for data in [build_bmp(3, 1, 0, &[1, 2, 3, 0]), build_bmp(3, 1, 1, &[3, 7, 0, 1])] {
+            assert_eq!(decode_rgb(&data).unwrap().to_rgba(true), decode(&data).unwrap().to_rgba(true));
+        }
+    }
+
+    #[test]
+    fn lvl_with_true_color_tileset_preserves_tile_records() {
+        let mut data = bmp24(2, 1, &[3, 2, 1, 6, 5, 4, 0, 0]);
+        let record = 10u32 | (20 << 12) | (162 << 24);
+        data.extend_from_slice(&record.to_le_bytes());
+        let map = crate::lvl::Map::parse(&data).unwrap();
+        assert_eq!(map.tile(10, 20), 162);
+        assert_eq!(map.records.len(), 1);
+        assert_eq!(map.doors.len(), 1);
+        assert_eq!(map.tileset.unwrap().pixels, [[1, 2, 3], [4, 5, 6]]);
     }
 }

@@ -589,3 +589,22 @@
   pass (one unit ignored); opt-in asset/live-server tests skip by default. Clippy
   and release build pass with existing warnings. Actual local Continuum login,
   map/settings entry and a 30-second hold pass (zero security replies in this run).
+
+- Third separately approved public test (b80e9f4): corrected destination IPv4
+  progressed past the former sub-second server disconnect. Received the complete
+  97,357-byte map transfer at +4,873 ms and verified its CRC. Client then failed
+  locally with `bmp: unsupported bit depth 24` and sent its own disconnect. This
+  is evidence that the address correction removes the observed immediate blocker
+  for this attempt; it is not yet successful arena readiness. Approval consumed.
+- Downloaded map's embedded bitmap is 304x160, 24-bit BI_RGB, DIB size 40 and
+  pixel offset 54. Added lossless RGB decoding for embedded LVL tilesets while
+  preserving the existing indexed BM2 API. Handles BGR channels, DWORD row stride,
+  positive/negative height, and validates header/source bounds before allocation.
+  Microsoft BMP storage/header documentation corroborates the format:
+  https://learn.microsoft.com/en-us/windows/win32/gdi/bitmap-storage
+  https://learn.microsoft.com/en-us/windows/win32/api/wingdi/ns-wingdi-bitmapinfoheader
+  Five synthetic regressions cover orientation/padding/transparency, >256 colors,
+  truncated/invalid inputs, unchanged indexed decoding, and LVL tile boundaries.
+  Actual downloaded map parses 33,692 records/630 doors; every RGBA byte (194,560)
+  matches independent Pillow 12.3.0 decoding. No map/image assets committed.
+  Full tests: 89 unit +14 synthetic UDP pass, one ignored; clippy/release pass.

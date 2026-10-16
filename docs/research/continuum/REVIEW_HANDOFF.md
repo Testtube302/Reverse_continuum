@@ -184,3 +184,18 @@ The cipher comparison establishes agreement for captured packets, not complete
 server acceptance. Login sequencing/timing, host/network differences and billing
 identity remain possible factors. Do not label the build production-ready or the
 Trench Wars issue resolved without a successful AIContinuum arena-entry test.
+
+### Login-address result and 24-bit map support (2026-10-16)
+
+An additional explicitly approved public test of b80e9f4 downloaded the complete
+Trench Wars map instead of receiving the former immediate server disconnect.
+The next failure was local: `bmp: unsupported bit depth 24`. The client itself
+then disconnected. That approval is consumed; arena readiness remains unverified.
+
+The map loader now accepts 24-bit BI_RGB embedded tilesets without quantization,
+while preserving indexed/RLE8 support. The actual downloaded map parses offline
+and all 194,560 RGBA bytes match independent Pillow decoding. Regression fixtures
+are synthetic; the downloaded map remains outside Git. Full local suite: 89 unit
+and 14 synthetic protocol tests pass, one ignored; lint/release builds succeed.
+The desktop build includes these changes with a rollback backup. The next
+explicitly authorized public test must verify map readiness and connection hold.
