@@ -528,6 +528,43 @@ fn questionnaire_requests_are_reported_before_arena_entry() {
 }
 
 #[test]
+fn disconnect_preserves_server_ban_notice_but_not_player_chat() {
+    use aicontinuum::net::session::{Config, Phase, Session};
+    for kind in [0, 2, 5] {
+        let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+        server.set_read_timeout(Some(Duration::from_millis(500))).unwrap();
+        let mut client = Session::connect_continuum(Config {
+            server: server.local_addr().unwrap(), name: "fixture".into(), password: "fixture".into(),
+            arena: None, map_dir: std::env::temp_dir(),
+        }, |_| Some([0; 20]), [0; 64]).unwrap();
+        let (_, addr) = server.recv_from(&mut [0; 2048]).unwrap();
+        let cipher = reference_cipher();
+        server.send_to(&RESPONSE, addr).unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        client.update();
+        assert_eq!(receive(&server), ACK);
+        server.send_to(&cipher.encrypt(&[0, 2]).unwrap(), addr).unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        client.update();
+        for _ in 0..2 { receive(&server); }
+        let notice = "You are banned from SSC network till 2000-01-01 BanId #fixture";
+        let mut chat = vec![0x07, kind, 0, 0xff, 0xff];
+        chat.extend_from_slice(notice.as_bytes());
+        chat.push(0);
+        let mut cluster = vec![0, 0x0e, chat.len() as u8];
+        cluster.extend_from_slice(&chat);
+        cluster.extend_from_slice(&[2, 0, 7]);
+        server.send_to(&cipher.encrypt(&cluster).unwrap(), addr).unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        client.update();
+        let Phase::Failed(reason) = &client.phase else { panic!("expected disconnect") };
+        assert!(reason.contains("server closed the connection"));
+        assert_eq!(reason.contains(notice), kind == 0);
+        client.disconnect();
+    }
+}
+
+#[test]
 fn large_encrypted_download_crosses_multiple_ack_windows() {
     let (mut client, server, addr) = pair(|_| Some([0; 20]));
     let cipher = reference_cipher();

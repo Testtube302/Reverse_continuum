@@ -608,3 +608,22 @@
   Actual downloaded map parses 33,692 records/630 doors; every RGBA byte (194,560)
   matches independent Pillow 12.3.0 decoding. No map/image assets committed.
   Full tests: 89 unit +14 synthetic UDP pass, one ignored; clippy/release pass.
+
+- Fourth separately approved public test, f4edf72 (up to 90 seconds): arena ready
+  at +354 ms using the previously verified cached map; map/settings/player entry
+  loaded and normal spectator positions/time sync continued. At +15,298 ms the
+  server sent an explicit SSC network ban notice (BanId #1, expiry 2014-02-16
+  12:17 GMT+0), followed by core 07 at +15,549 ms. Test stopped immediately.
+  The historical expiry is inconsistent with the current date; this does not
+  establish a current ban on the user's account or identify which account/IP/
+  client-identity check caused it. Original-client control used a different host
+  route. No expansion challenge or security response occurred before closure.
+  This establishes encrypted login and arena entry, NOT a 90-second session or
+  production acceptance. Approval consumed; no more public tests performed.
+- Surface the received SSC ban notice in the connection-failed UI, retaining the
+  server's wording instead of asserting a cause. Only arena/server chat type 0 is
+  eligible; player/public/private messages are excluded. Encrypted synthetic test
+  covers the notice and disconnect arriving in one cluster and chat-type exclusion.
+  Full suite passes: 89 unit +15 synthetic UDP, one ignored; clippy/release pass.
+  Further public-server work requires clarification of the server-reported
+  restriction; do not rotate/borrow identities or change routes to evade it.

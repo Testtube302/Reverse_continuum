@@ -199,3 +199,24 @@ are synthetic; the downloaded map remains outside Git. Full local suite: 89 unit
 and 14 synthetic protocol tests pass, one ignored; lint/release builds succeed.
 The desktop build includes these changes with a rollback backup. The next
 explicitly authorized public test must verify map readiness and connection hold.
+
+### Latest result: arena entry succeeds, then SSC reports a restriction
+
+The approved f4edf72 test entered the arena at +354 ms with map/settings loaded,
+then received an SSC network-ban notice and disconnected at +15.549 seconds.
+The server reports BanId #1 with a 2014 expiry. That inconsistent date does not
+prove a current user-account ban; the matching rule (account, route, client
+identity or another server check) is unknown. No expansion/security challenge
+preceded this disconnect. The 90-second hold did not complete.
+
+The UI now retains this server notice instead of only showing a generic close.
+The synthetic regression excludes player chat from this diagnostic. Current
+suite: 89 unit +15 synthetic UDP tests pass, one ignored; clippy/release pass.
+Repo and desktop include all measured fixes and rollback remains available.
+
+Encrypted login, full map download and arena readiness are now demonstrated on
+Trench Wars. Sustained acceptance remains blocked by its explicit restriction.
+An operator needs to explain the reported BanId/matching rule before further
+public testing or identity-related changes. Do not work around it with borrowed
+identities, fabricated integrity values or alternate network routes. No further
+public-test approval remains outstanding.

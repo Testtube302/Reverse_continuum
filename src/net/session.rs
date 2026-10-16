@@ -320,7 +320,13 @@ impl Session {
                         Phase::LoggingIn => " during login",
                         _ => "",
                     };
-                    self.fail(format!("{why}{stage}"));
+                    let mut reason = format!("{why}{stage}");
+                    if let Some(notice) = self.chat.iter().rev().take(8).find(|c|
+                        c.kind == 0 && c.text.starts_with("You are banned from SSC network")
+                    ) {
+                        reason.push_str(&format!("; server reported: {}", notice.text));
+                    }
+                    self.fail(reason);
                 }
             }
         }
