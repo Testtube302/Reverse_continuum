@@ -739,3 +739,24 @@
   1 chat; one ignored unit; live/assets checks unconfigured), clippy passes with
   existing warnings, release and Windows cross-target check pass. No public server
   connections. Existing --mute and screenshot silence remain intentional.
+
+- Engine audio (2026-10-16): the enabled backend only played discrete SoundCue
+  events; no engine loop or F8 handler existed. Added a per-tick effective engine
+  mode and one persistent local engine loop, changed only on mode transitions.
+  Current asset mapping: idle hum, normal forward/reverse rev, afterburner thrust,
+  rocket rocket2. These playback choices restore the missing functionality but
+  have not been measured against original Continuum's exact mix/pitch/timing.
+  Shift alone leaves the existing physics idle; Shift plus forward/reverse uses
+  afterburners when energy permits. Shutdown disables the loop; death, spectating,
+  disconnection and return to the launcher stop playback. F8 toggles engine audio
+  (including through the Esc menu); Shift+F8 remains the macro binding. --mute and
+  screenshot mode silence engines too. No saved key/profile changes.
+- Tests: new simulation regression covers forward/reverse, boost, energy depletion,
+  Shift alone, shutdown/recovery, rocket expiry and release. Frontend regression
+  checks clip changes, death, spectator and ship re-entry. A temporary native
+  CoreAudio harness exercised the actual Sounds controller through idle, forward,
+  boost, reverse, release, off/on, mute and spectator transitions successfully.
+  No server connection; physical speaker confirmation remains a user retest.
+  Full suite passes (93 library, 1 frontend, 15 transport, 1 chat; one ignored
+  unit; asset/live checks unconfigured). Clippy has only the prior warnings;
+  release build and Windows cross-target check pass.

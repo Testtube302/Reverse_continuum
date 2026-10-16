@@ -12,9 +12,9 @@ use aicontinuum::launcher::Action;
 use aicontinuum::lvl::{Map, TILE_PIXELS};
 use aicontinuum::net::session::{Config, Phase, SPECTATOR, Session};
 use aicontinuum::settings::ArenaSettings;
-use aicontinuum::sim::{Input, TICK_SECONDS, Vec2};
+use aicontinuum::sim::{EngineState, Input, TICK_SECONDS, Vec2};
 use aicontinuum::weapons::{Weapon, WeaponKind};
-use macroquad::audio::{PlaySoundParams, Sound, load_sound_from_bytes, play_sound};
+use macroquad::audio::{PlaySoundParams, Sound, load_sound_from_bytes, play_sound, stop_sound};
 use macroquad::prelude::*;
 
 const TILESET_COLUMNS: u32 = 19;
@@ -321,13 +321,12 @@ impl Graphics {
 struct Sounds {
     clips: HashMap<String, Option<Sound>>,
     muted: bool,
+    engine_enabled: bool,
+    engine: Option<&'static str>,
 }
 
 impl Sounds {
-    async fn play(&mut self, assets: &AssetDir, name: &str, volume: f32) {
-        if self.muted || volume <= 0.0 {
-            return;
-        }
+    async fn load(&mut self, assets: &AssetDir, name: &str) {
         if !self.clips.contains_key(name) {
             let clip = match assets.sound(name) {
                 Ok(bytes) => match load_sound_from_bytes(&bytes).await {
@@ -344,9 +343,86 @@ impl Sounds {
             };
             self.clips.insert(name.to_string(), clip);
         }
+    }
+
+    async fn play(&mut self, assets: &AssetDir, name: &str, volume: f32) {
+        if self.muted || volume <= 0.0 {
+            return;
+        }
+        self.load(assets, name).await;
         if let Some(Some(s)) = self.clips.get(name) {
             play_sound(s, PlaySoundParams { looped: false, volume });
         }
+    }
+
+    async fn update_engine(&mut self, assets: &AssetDir, game: &Game) {
+        let wanted = if self.muted || !self.engine_enabled { None } else { engine_clip(game) };
+        if wanted == self.engine {
+            return; // Keep the current loop running instead of restarting every frame.
+        }
+        self.stop_engine();
+        if let Some(name) = wanted {
+            self.load(assets, name).await;
+            if let Some(Some(sound)) = self.clips.get(name) {
+                play_sound(sound, PlaySoundParams { looped: true, volume: 1.0 });
+            }
+        }
+        self.engine = wanted;
+    }
+
+    fn stop_engine(&mut self) {
+        if let Some(name) = self.engine.take()
+            && let Some(Some(sound)) = self.clips.get(name)
+        {
+            stop_sound(sound);
+        }
+    }
+}
+
+impl Drop for Sounds {
+    fn drop(&mut self) {
+        self.stop_engine(); // Returning to the launcher must not leave a loop playing.
+    }
+}
+
+fn engine_clip(game: &Game) -> Option<&'static str> {
+    if !game.alive() || game.session.as_ref().is_some_and(|s| !s.ready()) {
+        return None;
+    }
+    match game.ship.as_ref()?.engine_state {
+        EngineState::Idle => Some("hum"),
+        EngineState::Thrust => Some("rev"),
+        EngineState::Afterburner => Some("thrust"),
+        EngineState::Rocket => Some("rocket2"),
+        EngineState::Disabled => None,
+    }
+}
+
+#[cfg(test)]
+mod audio_tests {
+    use super::*;
+
+    #[test]
+    fn engine_audio_follows_simulation_and_stops_for_death_or_spectating() {
+        let mut game = Game::offline(Map::empty(), ArenaSettings::default(), 0);
+        let forward = Input { forward: true, ..Default::default() };
+        game.tick(forward);
+        assert_eq!(engine_clip(&game), Some("rev"));
+        game.tick(Input { afterburner: true, ..forward });
+        assert_eq!(engine_clip(&game), Some("thrust"));
+        game.tick(Input::default());
+        assert_eq!(engine_clip(&game), Some("hum"));
+        game.ship.as_mut().unwrap().shutdown_ticks = 1;
+        game.tick(forward);
+        assert_eq!(engine_clip(&game), None);
+        game.tick(forward);
+        assert_eq!(engine_clip(&game), Some("rev"));
+        game.dead_ticks = 10;
+        assert_eq!(engine_clip(&game), None);
+        game.request_ship(SPECTATOR);
+        assert_eq!(engine_clip(&game), None);
+        game.request_ship(0);
+        assert_eq!(engine_clip(&game), Some("hum"));
     }
 }
 
@@ -556,7 +632,10 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
     let gfx = Graphics::load(&assets);
     let mut hud = hud::Hud::load(&assets);
     hud.statbox = args.statbox;
-    let mut sounds = Sounds { clips: HashMap::new(), muted: args.mute || args.screenshot.is_some() };
+    let mut sounds = Sounds {
+        clips: HashMap::new(), muted: args.mute || args.screenshot.is_some(),
+        engine_enabled: true, engine: None,
+    };
 
     let mut game = match args.connect {
         Some(server) => {
@@ -637,6 +716,12 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
     loop {
         // Chat entry: Enter opens/sends, Esc cancels; while typing, keys go to the message.
         let typing = hud.chat_input.is_some();
+        if !typing && is_key_pressed(KeyCode::F8)
+            && !key_down(Key::Shift) && !key_down(Key::Ctrl) && !key_down(Key::Alt)
+        {
+            sounds.engine_enabled = !sounds.engine_enabled;
+            game.notices.push(format!("Engine sounds {}", if sounds.engine_enabled { "on" } else { "off" }));
+        }
         // Esc menu: Q quits, 1-8/S pick a ship, any other key resumes.
         if menu_open {
             if let Some(key) = get_last_key_pressed() {
@@ -894,6 +979,7 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
             }
         }
 
+        sounds.update_engine(assets, &game).await;
         for cue in std::mem::take(&mut game.sounds) {
             let d = cue.position.sub(game.camera).length();
             sounds.play(&assets, &cue.name, (1.0 - d / HEARING_RANGE).clamp(0.0, 1.0)).await;
