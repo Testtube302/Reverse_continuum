@@ -54,7 +54,7 @@ pub const LOGIN_RESPONSES: [&str; 19] = [
     "billing server down (OK)",
     "server busy",
     "restricted",
-    "demo version",
+    "new-user questionnaire requested",
     "too many demo users",
     "demo versions not allowed",
 ];
@@ -303,6 +303,10 @@ impl Session {
     /// Processes network traffic. Call every frame.
     pub fn update(&mut self) {
         for ev in self.transport.poll() {
+            // Keep the original failure visible if other packets arrived in the same batch.
+            if matches!(self.phase, Phase::Failed(_)) {
+                break;
+            }
             match ev {
                 Event::Connected => {
                     eprintln!("[Session] encryption established");
@@ -639,6 +643,21 @@ impl Session {
                 let text = LOGIN_RESPONSES.get(code as usize).copied().unwrap_or("unknown");
                 eprintln!("[Session] login response {code}: {text}");
                 self.note(format!("login response {code}: {text}"));
+                // Public nullspace PasswordResponse and SS.NET S2C_LoginResponse:
+                // byte 19 requests demographics independently of the login result.
+                let demographics = p.get(19).copied();
+                eprintln!("[Session] questionnaire flag: {}", match demographics {
+                    Some(0) => "not requested",
+                    Some(_) => "requested",
+                    None => "absent (short login response)",
+                });
+                if code == 0x10 || (matches!(code, 0x00 | 0x06 | 0x0D)
+                    && demographics.is_some_and(|value| value != 0))
+                {
+                    self.fail("New-user questionnaire required.\nAIContinuum cannot submit it yet.\nComplete it in the original Continuum client with this same account\nand server, then reconnect.".into());
+                    self.transport.disconnect();
+                    return;
+                }
                 match code {
                     0x00 | 0x0D => self.send_arena_login(),
                     0x01 => self.send_login(true),

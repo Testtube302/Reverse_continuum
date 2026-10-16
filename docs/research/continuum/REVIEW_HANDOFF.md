@@ -125,3 +125,19 @@ an unexplained core disconnect. The indexed map request and padded expansion
 challenge corrections did not resolve the observed attempt. Do not infer a
 confirmed cause from passing synthetic tests. Use the next owner-run trace to
 identify the actual divergence before changing protocol behavior again.
+
+### New-user questionnaire (2026-10-16)
+
+On `codex/continuum-ack-compatibility`, login diagnostics now include the
+questionnaire flag at offset 19 of S2C 0x0a. Successful login plus a nonzero flag,
+or login result 0x10, produces an explicit questionnaire-required error before
+arena entry. Complete the form in the original client with the **same account and
+server**, then retry. AIContinuum has no form submission UI yet and never sends
+fabricated demographics. Regressions cover eight response variants and preserve
+the error if subsequent arena packets arrive in the same update.
+
+The owner successfully connected on Windows and submitted the form on a different
+account. This is not proof that registration explains the AIContinuum account's
+disconnect: old traces omitted the flag. The next owner-run attempt can distinguish
+this condition. Sources: public nullspace `Connection.cpp` PasswordResponse and
+SS.NET `S2C_LoginResponse.cs` / `IAuth.cs`, with revisions recorded in NOTES.md.

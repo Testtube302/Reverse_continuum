@@ -417,6 +417,76 @@ fn continuum_session_requests_map_with_file_index() {
 }
 
 #[test]
+fn questionnaire_requests_are_reported_before_arena_entry() {
+    use aicontinuum::net::session::{Config, Phase, Session};
+
+    // Login OK can still require the form. Rejected passwords must retain their
+    // own error even if byte 19 is set; short synthetic replies remain supported.
+    for (code, flag, expected) in [
+        (0x00, Some(1), "questionnaire"),
+        (0x0D, Some(2), "questionnaire"),
+        (0x06, Some(1), "questionnaire"),
+        (0x10, Some(0), "questionnaire"),
+        (0x10, None, "questionnaire"),
+        (0x02, Some(1), "invalid password"),
+        (0x00, Some(0), "arena"),
+        (0x00, None, "arena"),
+    ] {
+        let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+        server.set_read_timeout(Some(Duration::from_millis(500))).unwrap();
+        let mut client = Session::connect_continuum(Config {
+            server: server.local_addr().unwrap(), name: "fixture".into(), password: "fixture".into(),
+            arena: None, map_dir: std::env::temp_dir().join("aic-questionnaire-fixture"),
+        }, |_| Some([0; 20]), [0; 64]).unwrap();
+        let (_, addr) = server.recv_from(&mut [0; 2048]).unwrap();
+        server.send_to(&RESPONSE, addr).unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        client.update();
+        assert_eq!(receive(&server), ACK);
+        let cipher = reference_cipher();
+        server.send_to(&cipher.encrypt(&[0, 2]).unwrap(), addr).unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        client.update();
+        for _ in 0..2 { receive(&server); } // sync, login
+
+        let mut login = vec![0x0a, code];
+        if let Some(flag) = flag {
+            login.resize(36, 0);
+            login[19] = flag;
+        }
+        // A later JoinGame in the same poll must not overwrite the form error.
+        let mut packet = vec![0, 0x0e, (login.len() + 6) as u8, 0, 3, 0, 0, 0, 0];
+        packet.extend_from_slice(&login);
+        packet.extend_from_slice(&[7, 0, 3, 1, 0, 0, 0, 0x02]);
+        server.send_to(&cipher.encrypt(&packet).unwrap(), addr).unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        client.update();
+        if expected == "arena" {
+            assert_eq!(client.phase, Phase::InArena);
+        } else {
+            assert!(matches!(&client.phase, Phase::Failed(reason) if reason.contains(expected)),
+                "code {code}, flag {flag:?}: {:?}", client.phase);
+            client.update();
+            assert!(matches!(&client.phase, Phase::Failed(reason) if reason.contains(expected)));
+        }
+
+        // Decrypt all responses to check the actual wire behavior, not just UI state.
+        server.set_nonblocking(true).unwrap();
+        let mut saw_arena = false;
+        let mut buf = [0; 2048];
+        while let Ok(n) = server.recv(&mut buf) {
+            let decoded = cipher.decrypt(&buf[..n]).unwrap();
+            if decoded.starts_with(&[0, 3]) {
+                assert_ne!(decoded.get(6), Some(&0x17), "must not fabricate form answers");
+                saw_arena |= decoded.get(6) == Some(&0x01);
+            }
+        }
+        assert_eq!(saw_arena, expected == "arena");
+        client.disconnect();
+    }
+}
+
+#[test]
 fn large_encrypted_download_crosses_multiple_ack_windows() {
     let (mut client, server, addr) = pair(|_| Some([0; 20]));
     let cipher = reference_cipher();

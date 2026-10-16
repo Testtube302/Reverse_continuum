@@ -876,7 +876,9 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
                 Some(p) => format!("{p:?}... {}", game.session.as_ref().and_then(|s| s.log.last()).cloned().unwrap_or_default()),
                 None => String::new(),
             };
-            draw_text(&status, 8.0, 16.0, 16.0, GREEN);
+            for (line, text) in status.lines().enumerate() {
+                draw_text(text, 8.0, 16.0 + line as f32 * 18.0, 16.0, GREEN);
+            }
         }
 
         for cue in std::mem::take(&mut game.sounds) {

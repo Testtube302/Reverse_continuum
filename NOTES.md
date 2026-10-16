@@ -495,3 +495,22 @@
   not prove an account restriction or explain AIContinuum's sub-second disconnect.
   Closed the original client, stopped the relay, restored prior profile/zone files,
   and removed the temporary plaintext password file. Account creation persists.
+
+- Questionnaire investigation (2026-10-16): owner reports successful original
+  Continuum login on native Windows after submitting a mandatory new-user form,
+  using a DIFFERENT account. This verifies that route/client, but does not clear
+  any registration requirement for the AIContinuum account. Public nullspace
+  Connection.cpp PasswordResponse (7ebdbc53a052fa62ff246b5f6a8b3347c395e5a4)
+  reads byte 19 independently of the login code; SS.NET S2C_LoginResponse.DemoData
+  and AuthCode.AskDemographics (750f16298253d51e7ce4b2b55078acc8a3122ff9)
+  confirm the flag and success code 0x10. AIContinuum ignored the flag and mislabeled
+  0x10 as demo version. Now log flag presence/request state and stop with explicit
+  same-account original-client completion instructions when requested. No form
+  answers are generated or transmitted; an in-client submission UI remains missing.
+  Preserve this failure against subsequent packets in the same update. Synthetic
+  encrypted tests cover OK+flag, nonzero flag values, billing-down/spec-only+flag,
+  code 0x10, bad password precedence, short replies and normal arena entry.
+  Full suite: 84 unit + 13 synthetic UDP tests pass; one ignored, external asset/
+  server tests skip without configuration. Clippy succeeds with existing warnings.
+  Earlier public traces did not retain byte 19, so questionnaire causality is still
+  unconfirmed. No public-server test performed for this change.
