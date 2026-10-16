@@ -627,3 +627,19 @@
   Full suite passes: 89 unit +15 synthetic UDP, one ignored; clippy/release pass.
   Further public-server work requires clarification of the server-reported
   restriction; do not rotate/borrow identities or change routes to evade it.
+
+- Owner follow-up: reports original Continuum accepts the same account from the
+  same internet connection as AIContinuum. Treat an account/IP ban as less likely;
+  operator feedback is not required to continue local compatibility investigation.
+  Re-analyzed existing captures only: original remains active through 83.462 s,
+  no extra expansion challenge/security reply. Original billing field is populated;
+  ours is zero. Across two local original sessions, account/machine field unchanged
+  while all 64 billing bytes differ. Local/public comparison changes account but
+  retains machine field; all 64 billing bytes differ. No values logged or copied
+  into AIContinuum. Our account-name-derived machine field is also not equivalent
+  to the reference's account-independent machine identity. Generation remains
+  unimplemented; causal link to SSC rejection is unproved. Next local investigation
+  should establish billing-field construction/inputs, not replay captured values.
+  SS.NET BillingUdp.cs forwards both fields; public TCP billing documentation
+  distinguishes macid/contid (https://wiki.minegoboom.com/index.php/TCP_Billing_Protocol).
+  No public test, reference-client execution, or desktop binary change this follow-up.

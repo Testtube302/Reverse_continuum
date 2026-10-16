@@ -216,7 +216,38 @@ Repo and desktop include all measured fixes and rollback remains available.
 
 Encrypted login, full map download and arena readiness are now demonstrated on
 Trench Wars. Sustained acceptance remains blocked by its explicit restriction.
-An operator needs to explain the reported BanId/matching rule before further
-public testing or identity-related changes. Do not work around it with borrowed
+The reported BanId/matching rule is unknown. Operator feedback could explain it,
+but local protocol investigation can continue without that feedback. Do not work around it with borrowed
 identities, fabricated integrity values or alternate network routes. No further
 public-test approval remains outstanding.
+
+### Follow-up: missing client identification remains a compatibility hypothesis
+
+The owner reports the same account works in original Continuum on the same
+internet connection as the Mac. This makes a simple account/public-IP ban less
+likely; it does not prove which client field triggers the rejection.
+
+Local-only comparison of the existing reference captures found:
+
+- Original reference traffic continues through 83.462 seconds, with no extra
+  key-expansion challenge or executable-security response in that interval.
+- Its login contains a populated 64-byte billing field; AIContinuum supplies zeros.
+- Two local reference sessions retain the same account and four-byte machine field,
+  but differ in all 64 billing-field bytes. The local/public reference comparison
+  also retains the same machine field with a different account and billing bytes.
+  Only equality/counts were printed; identity values and credentials stay private.
+- AIContinuum currently derives its machine field from the account name, which
+  does not model the reference's account-independent machine field.
+
+SS.NET BillingUdp forwards the machine field and opaque 64-byte field to billing;
+its source does not supply their generation algorithm. The public TCP billing
+specification also distinguishes macid and contid:
+https://wiki.minegoboom.com/index.php/TCP_Billing_Protocol
+This is evidence about protocol roles, not evidence of SSC's matching rule.
+
+Next bounded work: trace construction of the billing field in the isolated
+reference client against the local server, establish its inputs and session
+variation, and validate a legitimate implementation locally. Do not infer that
+any nonzero bytes suffice, replay captured identities, or claim a proven root
+cause from the missing field alone. Missing transport responses are a weaker
+current hypothesis because no additional challenge precedes the rejection.

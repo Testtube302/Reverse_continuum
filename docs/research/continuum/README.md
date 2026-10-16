@@ -247,9 +247,10 @@ Use an executable wrapper when passing it as `--continuum-expander`. On this Mac
 Unicorn's cache initialization needs execution outside Codex's restricted sandbox.
 The emulator and original image are not included in the game executable.
 
-Protocol sources: public nullspace `Connection.cpp` documents the 86-byte expansion
-response (`00 13`, seed, twenty words); SS.NET `LoginPacket.cs` documents the
-165-byte Continuum login and opaque billing field. No executable-integrity spoofing
+Protocol sources: original 0.40 captures and TWCore document the 88-byte expansion
+response (`00 13`, u16 version, seed, twenty words); public nullspace omitted the
+version field. SS.NET `LoginPacket.cs` documents the 165-byte Continuum login and
+opaque billing field. No executable-integrity spoofing
 or borrowed billing identity is part of this implementation.
 
 To reproduce the reference-adapter checks with its Python environment:
