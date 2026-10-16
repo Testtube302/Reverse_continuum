@@ -561,10 +561,14 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
             };
             let session = if let Some(program) = &args.continuum_expander {
                 let mut expander = aicontinuum::net::continuum_expander::CommandExpander::new(program.clone());
-                Session::connect_continuum(config, move |seed| match expander.expand(seed) {
-                    Ok(table) => Some(table),
-                    Err(error) => { eprintln!("Continuum expansion: {error}"); None }
-                }, [0; 64])
+                aicontinuum::net::native_identity::prepare(|nonce| expander.expand_identity(nonce))
+                    .and_then(|identity| {
+                        eprintln!("[Session] native identity prepared; Windows-only fields unavailable");
+                        Session::connect_continuum_identified(config, move |seed| match expander.expand(seed) {
+                            Ok(table) => Some(table),
+                            Err(error) => { eprintln!("Continuum expansion: {error}"); None }
+                        }, identity)
+                    })
             } else {
                 Session::connect(config)
             };

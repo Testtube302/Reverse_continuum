@@ -1,9 +1,9 @@
 # Continuum billing identification — 2026-10-16
 
 The 64-byte login field has a verified codec in
-`src/net/continuum_identity.rs`. It is not yet enabled in the launcher: the native
-machine-information collector and platform mapping remain incomplete. This is
-not a demonstrated fix for the SSC rejection. No new public test was performed.
+`src/net/continuum_identity.rs`. The macOS launcher now uses it with the explicit
+native mapping described below. This is not yet a demonstrated fix for the SSC
+rejection; local interoperability does not establish public-server acceptance.
 
 The owner authorized analysis of the original client for this compatibility work.
 The findings below came from the pinned read-only image described in README.md,
@@ -54,7 +54,7 @@ Object offsets are internal reference offsets, not offsets into the wire field.
 | 7 | `2c` | Registry value selected by lowercase-name CRC for `Identifier`; exact path not yet resolved |
 | 8, 9 | `1c`, `28` | RAS connection/dial-parameter data (`0x412700`); exact selected string members require confirmation |
 | 10 | `30` | Another registry-derived result; selector/path unresolved |
-| 11, 12 | `20`, `38` | String CRCs from two OS calls (`0x4401e0`), consistent with user/computer-name APIs; imported API names still require direct verification |
+| 11, 12 | `20`, `38` | String CRCs from GetUserNameA and GetComputerNameA (`0x4401e0`), excluding NUL terminators |
 | 13 | `24` | XOR of a selected Windows-directory entry's creation-time words (`0x4393e0`); filename selector unresolved |
 
 The registry collector (`0x453e10`, traversal `0x412fa0`) selects entries by CRCs
@@ -69,14 +69,45 @@ Static strings independently identify `RasEnumConnectionsA` and
 
 The separate login machine word (packet offset 66) comes from a volume-serial
 lookup, with signed absolute-value handling and fallback 1 (`0x4459b0`). The
-client's current account-name CRC is not equivalent. This is a separate gap
-from the 64-byte field and remains unchanged by the codec work.
+legacy API's account-name CRC is not equivalent. The identified login API now
+accepts the native volume-derived machine word separately from the billing field.
 
 Native macOS does not provide these Windows registry paths or Windows directory
-metadata. A collector needs an explicit, justified platform mapping and local
-verification before launcher integration. Encrypting zeros, inventing Windows
-registration data, or importing the reference VM's identity would not establish
-that mapping. The server-side reason for rejecting the current client is unknown.
+metadata. The server-side reason for rejecting the previous client is unknown.
+
+## Native macOS mapping
+
+`native_identity::prepare` collects real local information without a game-account
+input, captured values, configurable replacement identifiers or identity files:
+
+- Word 11: running CRC32 of the OS user name from `getpwuid_r(geteuid())`.
+- Word 12: running CRC32 of the hostname from `gethostname`.
+- Other words: zero, meaning the Windows-only information is unavailable.
+- Separate machine word: CRC32 of the Data volume's 16-byte UUID, converted with
+  signed absolute value and zero fallback 1. Older systems without a separate
+  Data volume use the root volume. This remains stable across account changes;
+  changing game profiles does not generate new machine identifiers.
+- Timezone: current local offset including daylight saving, in minutes west of UTC.
+- Nonce: four fresh bytes from the OS random source for each connection. This
+  changes the encoding, not the underlying machine identity.
+
+This is a documented cross-platform mapping, not a claim that a Mac's volume UUID
+is a Windows volume serial or its DNS hostname is a Windows NetBIOS name. The name
+fields use the Mac's native byte strings without pretending they came from Windows.
+Collection/helper failures stop before network negotiation instead of reverting
+to a blank billing field. Other platforms currently return an explicit unsupported
+error in this new collector; the existing low-level caller-supplied API remains.
+
+The two original OS API names were confirmed by matching the saved import pointers
+to Wine 5.5's exported GetUserNameA/GetComputerNameA symbols (including the advapi32
+relocation corroborated with RegEnumKeyA). API semantics are documented by Microsoft:
+[GetUserNameA](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getusernamea),
+[GetComputerNameA](https://learn.microsoft.com/en-us/windows/desktop/api/winbase/nf-winbase-getcomputernamea),
+[GetVolumeInformationA](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getvolumeinformationa).
+The UUID collector uses Apple's documented
+[getattrlist / ATTR_VOL_UUID](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/getattrlist.2.html).
+Only identifier checksums are sent; diagnostics omit their values. These checksums
+are not secure anonymization and should not be published in logs.
 
 ## Local verification and reproduction
 
@@ -100,8 +131,12 @@ its original single-argument session-expansion interface remains unchanged.
 must implement it before use. The image and its emulator remain a private local
 dependency, not a standalone Rust implementation.
 
-Next work: resolve the registry path filters and OS call names, confirm the
-selected file/RAS inputs with synthetic OS responses, then define a truthful
-collector for each supported platform. Verify encoding and collection locally
-before changing the desktop's login behavior. Public acceptance still needs a
-separately authorized test and cannot be inferred from codec correctness.
+Local gameplay tests can exercise the new path with:
+
+```sh
+AICONTINUUM_SERVER=127.0.0.1:5000 AICONTINUUM_TEST_EXPANDER=/path/to/expand cargo test --test live_server -- --test-threads=1
+```
+
+For a future Windows collector, registry ancestor filters and the selected
+file/RAS inputs still need resolution. Public acceptance of the native Mac mapping
+needs a separately authorized test and cannot be inferred from codec correctness.

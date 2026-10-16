@@ -1,10 +1,21 @@
 //! Codec for the 64-byte Continuum login billing field.
 //!
 //! This only encodes caller-supplied information. It does not collect machine
-//! identifiers, establish a native macOS mapping, or enable identity in the UI.
+//! identifiers. The native macOS collector and launcher integration are separate
+//! in native_identity.rs.
 //! See docs/research/continuum/IDENTITY.md for measured field sources and limits.
 use super::continuum::ContinuumCipher;
 use crate::lvl::crc32;
+
+/// Prepared login metadata. Deliberately does not implement Debug: these values
+/// identify the local installation and must not enter connection logs.
+#[derive(Clone, Copy)]
+pub struct LoginIdentity {
+    pub machine_id: u32,
+    /// Minutes west of UTC, including the current daylight-saving adjustment.
+    pub timezone_bias: i16,
+    pub billing: [u8; 64],
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IdentityError {

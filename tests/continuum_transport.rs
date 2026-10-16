@@ -312,46 +312,70 @@ fn answers_encrypted_expansion_challenge_without_changing_session_key() {
 #[test]
 fn session_uses_continuum_login_layout_only_after_encrypted_ack() {
     use aicontinuum::net::session::{Config, Session};
-    let server = UdpSocket::bind("127.0.0.1:0").unwrap();
-    server
-        .set_read_timeout(Some(Duration::from_millis(500)))
-        .unwrap();
-    let config = Config {
-        server: server.local_addr().unwrap(),
-        name: "SyntheticCont".into(),
-        password: "synthetic".into(),
-        arena: None,
-        map_dir: std::env::temp_dir(),
-    };
-    let mut session = Session::connect_continuum(config, |_| Some([0; 20]), [0x5a; 64]).unwrap();
-    let mut buf = [0; 2048];
-    let (_, addr) = server.recv_from(&mut buf).unwrap();
-    server.send_to(&RESPONSE, addr).unwrap();
-    std::thread::sleep(Duration::from_millis(20));
-    session.update();
-    assert_eq!(receive(&server), ACK);
-    no_packet(&server);
-    let cipher = reference_cipher();
-    server
-        .send_to(&cipher.encrypt(&[0, 2, 0, 0, 0, 0]).unwrap(), addr)
-        .unwrap();
-    std::thread::sleep(Duration::from_millis(20));
-    session.update();
-    assert_eq!(&cipher.decrypt(&receive(&server)).unwrap()[..2], &[0, 5]);
-    let reliable = cipher.decrypt(&receive(&server)).unwrap();
-    assert_eq!(&reliable[..2], &[0, 3]);
-    let login = &reliable[6..];
-    assert_eq!(login.len(), 165);
-    assert_eq!(&login[..2], &[0x24, 0]);
-    assert_eq!(&login[2..15], b"SyntheticCont");
-    assert_eq!(&login[75..77], &40u16.to_le_bytes());
-    // Original 0.40 and SS.NET LoginPacket: IPv4 numeric value in LE order,
-    // followed by the client's actual bound port, login ID, and reserved word.
-    assert_eq!(&login[89..93], &[1, 0, 0, 127]);
-    assert_eq!(&login[93..95], &addr.port().to_le_bytes());
-    assert_eq!(&login[95..101], &[0; 6]);
-    assert_eq!(&login[101..], &[0x5a; 64]);
-    session.disconnect();
+    for identified in [false, true] {
+        let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+        server
+            .set_read_timeout(Some(Duration::from_millis(500)))
+            .unwrap();
+        let config = Config {
+            server: server.local_addr().unwrap(),
+            name: "SyntheticCont".into(),
+            password: "synthetic".into(),
+            arena: None,
+            map_dir: std::env::temp_dir(),
+        };
+        let mut billing = [0x5a; 64];
+        let mut session = if identified {
+            // Independently generated original-routine fixture, not our encoder.
+            let line = include_str!("../docs/research/continuum/identity-vectors.txt")
+                .lines().find(|l| !l.starts_with('#') && !l.is_empty()).unwrap();
+            let hex = line.split_whitespace().nth(3).unwrap();
+            for (i, byte) in billing.iter_mut().enumerate() {
+                *byte = u8::from_str_radix(&hex[i*2..i*2+2], 16).unwrap();
+            }
+            Session::connect_continuum_identified(config, |_| Some([0; 20]),
+                aicontinuum::net::continuum_identity::LoginIdentity {
+                    machine_id: 0x12345678, timezone_bias: -330, billing,
+                }).unwrap()
+        } else {
+            Session::connect_continuum(config, |_| Some([0; 20]), billing).unwrap()
+        };
+        let mut buf = [0; 2048];
+        let (_, addr) = server.recv_from(&mut buf).unwrap();
+        server.send_to(&RESPONSE, addr).unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        session.update();
+        assert_eq!(receive(&server), ACK);
+        no_packet(&server);
+        let cipher = reference_cipher();
+        server
+            .send_to(&cipher.encrypt(&[0, 2, 0, 0, 0, 0]).unwrap(), addr)
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        session.update();
+        assert_eq!(&cipher.decrypt(&receive(&server)).unwrap()[..2], &[0, 5]);
+        let reliable = cipher.decrypt(&receive(&server)).unwrap();
+        assert_eq!(&reliable[..2], &[0, 3]);
+        let login = &reliable[6..];
+        assert_eq!(login.len(), 165);
+        assert_eq!(&login[..2], &[0x24, 0]);
+        assert_eq!(&login[2..15], b"SyntheticCont");
+        assert_eq!(&login[75..77], &40u16.to_le_bytes());
+        // Original 0.40 and SS.NET LoginPacket: IPv4 numeric value in LE order,
+        // followed by the client's actual bound port, login ID, and reserved word.
+        assert_eq!(&login[89..93], &[1, 0, 0, 127]);
+        assert_eq!(&login[93..95], &addr.port().to_le_bytes());
+        assert_eq!(&login[95..101], &[0; 6]);
+        assert_eq!(&login[101..], &billing);
+        if identified {
+            assert_eq!(&login[66..70], &0x12345678u32.to_le_bytes());
+            assert_eq!(&login[71..73], &(-330i16).to_le_bytes());
+        } else {
+            assert_eq!(&login[66..70], &(aicontinuum::lvl::crc32(b"SyntheticCont") | 1).to_le_bytes());
+            assert_eq!(&login[71..73], &[0; 2]);
+        }
+        session.disconnect();
+    }
 }
 
 #[test]

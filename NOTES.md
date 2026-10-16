@@ -670,3 +670,26 @@
   test or running reference client; analysis/emulation used existing local inputs.
   Native macOS collection/mapping is still missing. Codec is not enabled in the
   launcher and does not yet change the login packet or establish an SSC fix.
+
+- Native macOS identity integration: confirmed original OS calls as GetUserNameA
+  and GetComputerNameA by matching saved import pointers to Wine 5.5 ELF exports;
+  advapi32 relocation also agrees with RegEnumKeyA. New native_identity collector
+  hashes the actual OS user/hostname, uses the Data volume UUID's CRC32 (signed
+  absolute value, fallback 1) as the separate machine word, and sends the current
+  timezone bias. Unsupported Windows-only words stay zero. This is an explicit
+  cross-platform mapping, not Windows registration emulation. Nonce comes from
+  /dev/urandom; no game-account input, saved replacement identifiers, VM identities
+  or plaintext identification logs. Collection/helper failures precede negotiation.
+  Sources and exact mapping: docs/research/continuum/IDENTITY.md.
+- Launcher and controlled login example use connect_continuum_identified; low-level
+  existing caller-supplied API and VIE behavior remain compatible. Helpers need
+  the explicit --identity mode. Non-macOS native collection is explicitly unsupported
+  pending an independently verified implementation; Windows cargo check still passes.
+- Validation: 92 unit +15 synthetic UDP tests pass, one unit ignored; new packet
+  checks preserve the supplied machine word, signed timezone and complete encoded
+  billing field only after the encrypted handshake. Four actual local-server tests
+  pass in Continuum/native mode: map/settings entry, periodic security exchange,
+  two-client flight, and firing/damage/kill reporting. Separate local session holds
+  90 seconds with two security replies. Release GUI joins a Warbird on loopback;
+  screenshot shows the live ship, map and HUD. Clippy/release pass with existing
+  warnings. No new public test yet; native mapping is not proven accepted by SSC.

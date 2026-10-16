@@ -173,6 +173,8 @@ pub struct Chat {
 pub struct Session {
     pub transport: Transport,
     continuum_id: Option<[u8; 64]>,
+    login_machine_id: Option<u32>,
+    login_timezone_bias: i16,
     pub config: Config,
     pub phase: Phase,
     pub pid: Option<u16>,
@@ -233,10 +235,24 @@ impl Session {
         Ok(Self::with_transport(config, transport, Some(identity)))
     }
 
+    /// Connect with freshly encoded local identification and native timezone.
+    pub fn connect_continuum_identified(
+        config: Config,
+        expand: impl FnMut(u32) -> Option<[u32; 20]> + Send + 'static,
+        identity: super::continuum_identity::LoginIdentity,
+    ) -> io::Result<Self> {
+        let mut session = Self::connect_continuum(config, expand, identity.billing)?;
+        session.login_machine_id = Some(identity.machine_id);
+        session.login_timezone_bias = identity.timezone_bias;
+        Ok(session)
+    }
+
     fn with_transport(config: Config, transport: Transport, continuum_id: Option<[u8; 64]>) -> Self {
         Self {
             transport,
             continuum_id,
+            login_machine_id: None,
+            login_timezone_bias: 0,
             config,
             phase: Phase::Connecting,
             pid: None,
@@ -483,9 +499,10 @@ impl Session {
         let mut p = vec![if self.continuum_id.is_some() { 0x24 } else { 0x09 }, new_user as u8];
         p.extend(fixed_str(&self.config.name, 32));
         p.extend(fixed_str(&self.config.password, 32));
-        p.extend_from_slice(&(crc32(self.config.name.as_bytes()) | 1).to_le_bytes()); // machine id
+        let machine_id = self.login_machine_id.unwrap_or_else(|| crc32(self.config.name.as_bytes()) | 1);
+        p.extend_from_slice(&machine_id.to_le_bytes());
         p.push(0x04); // connect type
-        p.extend_from_slice(&0u16.to_le_bytes()); // timezone bias
+        p.extend_from_slice(&self.login_timezone_bias.to_le_bytes());
         p.extend_from_slice(&0u16.to_le_bytes());
         let version = if self.continuum_id.is_some() { 40u16 } else { 0x86 };
         p.extend_from_slice(&version.to_le_bytes());

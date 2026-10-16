@@ -13,6 +13,7 @@ name = "aicontinuum"
 version = "0.1.0"
 dependencies = [
  "image 0.25.10",
+ "libc",
  "macroquad",
  "miniz_oxide 0.9.1",
 ]

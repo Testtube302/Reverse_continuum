@@ -15,8 +15,9 @@ adapter.** `Session::connect_continuum` sends the 165-byte login and the CLI acc
 locally by emulating a pinned original-code image. It is **not a standalone Rust
 rewrite** of expansion, and the original-code image is not bundled or committed.
 Default connections still use VIE. A tested [billing identity codec](IDENTITY.md)
-is available, but native identity collection and launcher integration remain
-unimplemented. Executable integrity responses are also unimplemented;
+is available, and the macOS launcher sends an encoded native identity using real
+user/host information and a volume-derived machine word. Windows-only fields
+remain unavailable. Executable integrity responses are unimplemented;
 compatibility with all public zones is not established.
 
 The public nullspace cipher was ported under MIT, with its license included here.
@@ -227,10 +228,12 @@ have different relocated imports; it is not accepted automatically. This adapter
 is a reproducible development bridge for the approved image, not a distributable
 replacement for independently implementing the expansion transformations.
 
-The helper contract is one decimal key argument and exactly 80 binary stdout bytes.
+The session helper contract is one decimal key argument and exactly 80 binary stdout bytes.
+The native login path additionally requires `<decimal-nonce> --identity`, also
+returning 80 bytes, for the separate billing-field table.
 Errors go to stderr and produce a failed connection; no VIE fallback is attempted.
-The optional CLI mode sends an unspecified (all-zero) 64-byte billing identity.
-Zone servers treat that field as opaque; billing systems may reject it. The existing
+The macOS CLI now sends the [documented native identity](IDENTITY.md).
+Zone servers treat that field as opaque; billing systems may reject this mapping. The existing
 executable checksum remains zero. Servers enforcing the original executable's
 integrity may reject the client even when encryption is correct.
 

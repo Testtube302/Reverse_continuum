@@ -28,9 +28,9 @@ requires the explicit `--continuum-expander` option.
   subsequent key-expansion challenge responses.
 - Optional server-owned `scrty1` parser and local command-provider interface.
 - Python reference adapter, pinned Unicorn dependency and validation script.
-- Billing identity codec and 24 synthetic original-routine vectors; see
-  [field sources and remaining collector work](IDENTITY.md). This does not yet
-  change the launcher or resolve the SSC restriction.
+- Billing identity codec, 24 synthetic original-routine vectors and a native macOS
+  collector integrated into the launcher; see [field sources and mapping](IDENTITY.md).
+  Public acceptance is unverified; the SSC restriction is not yet resolved.
 - Public-reference cipher/finalization vectors and synthetic expansion vectors.
 - Eight synthetic UDP integration tests, examples, and investigation notes.
 
@@ -63,7 +63,7 @@ Local test command, from this checkout on the owner's Mac:
 cargo run --example continuum_login -- 127.0.0.1:5000 '/Users/ryancallicoat/Documents/New project/continuum-local-reference/expand' 90
 ```
 
-This example uses a dedicated test account and an unspecified billing identity.
+This example uses a dedicated test account and the native macOS billing identity.
 Only run it against an authorized local server. The owner chose to keep verification
 local; do not treat this handoff as approval for public-zone testing.
 
@@ -77,8 +77,9 @@ The release build, 82 active unit tests and eight synthetic UDP tests passed.
 
 These results establish a working local compatibility bridge. They do not establish
 standalone Rust expansion, Windows support for the helper, exhaustive coverage of
-all seeds, or acceptance by every public zone. The 64-byte billing identity is zero
-in the CLI path; the executable checksum remains zero. Strict servers may reject it.
+all seeds, or acceptance by every public zone. The macOS CLI now encodes local
+identification with unavailable Windows fields left zero; the executable checksum
+remains zero. Strict servers may reject it.
 
 ## Production review priorities
 
