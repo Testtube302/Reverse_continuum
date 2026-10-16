@@ -330,8 +330,17 @@ impl Sounds {
         }
         if !self.clips.contains_key(name) {
             let clip = match assets.sound(name) {
-                Ok(bytes) => load_sound_from_bytes(&bytes).await.ok(),
-                Err(_) => None,
+                Ok(bytes) => match load_sound_from_bytes(&bytes).await {
+                    Ok(sound) => Some(sound),
+                    Err(err) => {
+                        eprintln!("Could not decode sound {name}: {err:?}");
+                        None
+                    }
+                },
+                Err(err) => {
+                    eprintln!("Could not load sound {name}: {err}");
+                    None
+                }
             };
             self.clips.insert(name.to_string(), clip);
         }

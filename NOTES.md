@@ -724,3 +724,18 @@
   15 transport, 1 chat; one ignored unit; unconfigured live/assets checks skip).
   Actual two-client local Continuum chat test passes. Clippy and release build
   pass with existing warnings. No public-server message or additional public test.
+
+- Gameplay audio (2026-10-16): Cargo omitted macroquad's opt-in `audio` feature;
+  macroquad 0.4.16 defaults to an empty feature set and substitutes dummy audio.
+  Desktop diagnostics contained 98 disabled-audio warnings. Enabled the feature
+  and locked its quad-snd/decoder dependencies; missing/failed sound loads now log
+  once per clip instead of silently caching None. Source: pinned macroquad
+  Cargo.toml and src/audio.rs; quad-snd 0.2.8 src/coreaudio_snd.rs and src/mixer.rs.
+  The earlier M3 "75 decode" check used the dummy loader and did not prove decoding.
+- Validation with the real macOS CoreAudio backend: sound_check decodes all 75
+  installed .wa2 files, zero failures. Release offline GUI ran eight seconds with
+  scripted gun/bomb fire, no disabled-audio/load/panic diagnostics. Physical speaker
+  audibility still needs the owner's retest. Full tests pass (92 unit, 15 transport,
+  1 chat; one ignored unit; live/assets checks unconfigured), clippy passes with
+  existing warnings, release and Windows cross-target check pass. No public server
+  connections. Existing --mute and screenshot silence remain intentional.
