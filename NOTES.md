@@ -785,3 +785,23 @@
   No public tests. Owner also requested the pending personal desktop remap: Space
   guns, Shift+Space repel, Tab bombs. It is a local keyboard.dat change with backup;
   repository default bindings remain the original layout.
+
+- Arena list (2026-10-17): wired Esc A to reliable public-command packet `?arena`
+  without a local chat echo. Added S2C 0x2F decoding: repeated NUL-terminated names
+  and little-endian signed 16-bit populations; negative marks the current arena.
+  Source: SubspaceServer src/Core/Modules/PlayerCommand.cs Command_arena and
+  TryAppendToPacket (https://github.com/gigamon-dev/SubspaceServer). Malformed or
+  truncated entries are rejected as a whole, including missing count bytes.
+- Added a scrollable arena-name/player-count panel, current-arena marker, pending
+  and timeout messages, Up/Down or wheel scrolling, and Esc dismissal. Panel input
+  is consumed until release to avoid moving/firing while browsing. This implements
+  list retrieval/display, not arena switching or original-client pixel parity.
+- Two parser tests cover multiple entries, zero/current counts, the signed minimum,
+  empty replies and malformed tails. Actual local Continuum/native login test
+  receives the current arena with nonzero population and no command chat echo.
+  Release GUI screenshot shows 13 server arenas with current arena 0 highlighted.
+  Full sequential suite passes: 96 library, 2 frontend, 15 transport, 1 chat;
+  one ignored unit; unconfigured live/assets checks skip. The first parallel run
+  hit the existing questionnaire UDP-response timing assertion; sequential rerun
+  passes. Clippy retains prior warnings, release and Windows checks pass. No public
+  zone test or server configuration changes.

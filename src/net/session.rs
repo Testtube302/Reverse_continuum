@@ -183,6 +183,7 @@ pub struct Session {
     pub map: Option<Arc<Map>>,
     pub map_name: Option<String>,
     pub chat: Vec<Chat>,
+    pub arena_list: Option<Vec<super::arena_list::ArenaInfo>>,
     /// Shots and deaths received since the game last drained them.
     pub remote_fires: Vec<RemoteFire>,
     pub deaths: Vec<Death>,
@@ -261,6 +262,7 @@ impl Session {
             map: None,
             map_name: None,
             chat: Vec::new(),
+            arena_list: None,
             remote_fires: Vec::new(),
             deaths: Vec::new(),
             prize_events: Vec::new(),
@@ -615,6 +617,13 @@ impl Session {
         self.chat.push(Chat { kind: 2, pid, text: cstr(&p[5..]) });
     }
 
+    pub fn request_arena_list(&mut self) {
+        if !self.ready() { return; }
+        self.arena_list = None;
+        // Server command, not a local chat message. The reply is S2C 0x2F.
+        self.transport.send_reliable(b"\x06\x02\0\0\0?arena\0");
+    }
+
     /// Sends our position if due. `ship` is None while spectating. A non-empty `weapon` is
     /// always sent immediately (that's how shots reach other players). `dead` hides the ship
     /// during the post-death enter delay.
@@ -846,6 +855,11 @@ impl Session {
                         victim_velocity: victim.map_or_else(Vec2::default, |v| v.velocity),
                         killer_name,
                     });
+                }
+            }
+            0x2f => {
+                if let Some(arenas) = super::arena_list::parse(p) {
+                    self.arena_list = Some(arenas);
                 }
             }
             0x07 => {

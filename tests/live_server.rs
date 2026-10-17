@@ -203,6 +203,20 @@ fn public_chat_is_delivered_and_shown_once_to_the_sender() {
     assert_eq!(shown, 1, "sender must show its own message locally");
 }
 
+#[test]
+fn requests_and_receives_current_arena_list() {
+    if server().is_none() { return; }
+    let mut session = connect(config("AIC-ArenaList")).unwrap();
+    assert!(pump_until(&mut [&mut session], 15, |s| s[0].ready()));
+    session.request_arena_list();
+    let received = pump_until(&mut [&mut session], 5, |s| s[0].arena_list.is_some());
+    session.disconnect();
+    assert!(received, "server did not return an arena list");
+    let arenas = session.arena_list.as_ref().unwrap();
+    assert!(arenas.iter().any(|a| a.current && a.players >= 1));
+    assert!(!session.chat.iter().any(|c| c.text == "?arena"), "command must not be locally echoed");
+}
+
 /// Full combat round trip: B shoots A until A's client registers the damage, dies and tells
 /// the server, and the server announces the kill back to B.
 #[test]

@@ -805,6 +805,40 @@ pub fn draw_statbox(hud: &Hud, game: &Game, view: u8) {
     }
 }
 
+/// Scrollable server arena-list response. Does not switch arenas automatically.
+pub fn draw_arena_list(hud: &Hud, game: &Game, offset: &mut usize, timed_out: bool) {
+    let Some(session) = &game.session else { return };
+    let arenas = session.arena_list.as_deref();
+    let count = arenas.map_or(0, |a| a.len());
+    let capacity = ((screen_height() - 100.0) / FONT_H).max(1.0) as usize;
+    *offset = (*offset).min(count.saturating_sub(capacity));
+    let rows = count.min(capacity).max(1);
+    let w = 368.0;
+    let h = (rows as f32 + 4.0) * FONT_H;
+    let x = ((screen_width() - w) / 2.0).max(0.0);
+    let y = 30.0;
+    hud.swatch(ColorRow::Border1, x, y, w, h);
+    hud.swatch(ColorRow::Background, x + 2.0, y + 2.0, w - 4.0, h - 4.0);
+    hud.text("Arena list               Players", TextColor::Green, x + 8.0, y + 4.0);
+    match arenas {
+        None => {
+            let message = if timed_out { "No reply. Esc, then Esc A to retry." } else { "Requesting arenas from server..." };
+            hud.text(message, TextColor::White, x + 8.0, y + 20.0);
+        }
+        Some([]) => { hud.text("No arenas reported.", TextColor::White, x + 8.0, y + 20.0); }
+        Some(arenas) => {
+            for (i, arena) in arenas.iter().skip(*offset).take(capacity).enumerate() {
+                let name: String = arena.name.chars().take(28).collect();
+                let marker = if arena.current { '*' } else { ' ' };
+                let color = if arena.current { TextColor::Yellow } else { TextColor::White };
+                hud.text(&format!("{marker}{name:<28} {:>5}", arena.players), color,
+                    x + 8.0, y + 20.0 + i as f32 * FONT_H);
+            }
+        }
+    }
+    hud.text("* current   Up/Down: scroll   Esc: close", TextColor::Green, x + 8.0, y + h - 18.0);
+}
+
 /// Draws help page `page` in a bevelled box at the top left, sized to its text.
 const HELP_MAX_LINES: usize = 36;
 

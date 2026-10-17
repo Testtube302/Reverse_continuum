@@ -728,6 +728,9 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
     let mut scripted_ticks = 0u32;
     let mut fire_held = false;
     let mut menu_open = args.menu;
+    let mut arena_list_open = false;
+    let mut arena_list_offset = 0usize;
+    let mut arena_requested_at = 0.0;
     let mut help_page: Option<usize> = args.help;
     // The profile's key definitions and macros from keyboard.dat / macro.dat.
     let mut keyset = assets
@@ -762,8 +765,19 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
         // Esc menu: Q quits, 1-8/S pick a ship, any other key resumes.
         let mut menu_cycle = false;
         let mut menu_help = false;
+        let mut menu_arena = false;
         let mut menu_consumed = false;
-        if menu_open {
+        if arena_list_open {
+            menu_consumed = true;
+            if is_key_pressed(KeyCode::Escape) { arena_list_open = false; }
+            if is_key_pressed(KeyCode::Up) || mouse_wheel().1 > 0.0 {
+                arena_list_offset = arena_list_offset.saturating_sub(1);
+            }
+            if is_key_pressed(KeyCode::Down) || mouse_wheel().1 < 0.0 {
+                arena_list_offset = arena_list_offset.saturating_add(1);
+            }
+            while get_char_pressed().is_some() {}
+        } else if menu_open {
             if let Some(key) = get_last_key_pressed() {
                 menu_consumed = true;
                 menu_open = false;
@@ -781,6 +795,7 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
                         KeyCode::F3 => hud.show_names = !hud.show_names,
                         KeyCode::F4 => hud.show_radar = !hud.show_radar,
                         KeyCode::F5 => hud.show_messages = !hud.show_messages,
+                        KeyCode::A => menu_arena = true,
                         _ => {}
                     }
                 }
@@ -794,7 +809,7 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
                 while get_char_pressed().is_some() {}
             }
         }
-        if is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::KpEnter) {
+        if !menu_consumed && (is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::KpEnter)) {
             match hud.chat_input.take() {
                 Some(text) if !text.trim().is_empty() => {
                     if let Some(s) = game.session.as_mut() {
@@ -812,6 +827,9 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
         let (active, mut pressed) = game_keys.update(raw, typing, menu_open, menu_consumed);
         if menu_cycle {
             pressed.push("Cycle".into());
+        }
+        if menu_arena {
+            pressed.push("ArenaList".into());
         }
         pressed.extend(args.press.iter().filter(|(_, f)| *f == frame).map(|(a, _)| a.clone()));
         let ctrl_or_alt = key_down(Key::Ctrl) || key_down(Key::Alt);
@@ -919,6 +937,16 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
             use aicontinuum::sim::{STATUS_ANTIWARP, STATUS_CLOAK, STATUS_STEALTH, STATUS_XRADAR};
             for a in &pressed {
                 match a.as_str() {
+                    "ArenaList" => {
+                        if let Some(s) = game.session.as_mut() {
+                            s.request_arena_list();
+                            arena_list_open = true;
+                            arena_list_offset = 0;
+                            arena_requested_at = get_time();
+                        } else {
+                            game.notices.push("Arena list is only available while connected to a zone.".into());
+                        }
+                    }
                     "Stealth" => game.toggle_status(STATUS_STEALTH),
                     "Cloak" => game.toggle_status(STATUS_CLOAK),
                     "XRadar" => game.toggle_status(STATUS_XRADAR),
@@ -1014,6 +1042,9 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
             }
             if menu_open {
                 hud::draw_menu(&hud);
+            }
+            if arena_list_open {
+                hud::draw_arena_list(&hud, &game, &mut arena_list_offset, get_time() - arena_requested_at > 10.0);
             }
         } else {
             clear_background(BLACK);
