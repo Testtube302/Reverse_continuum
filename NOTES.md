@@ -760,3 +760,28 @@
   Full suite passes (93 library, 1 frontend, 15 transport, 1 chat; one ignored
   unit; asset/live checks unconfigured). Clippy has only the prior warnings;
   release build and Windows cross-target check pass.
+
+- Player identity and menu controls (2026-10-17): local dummy-account screenshot
+  verified that Cycle already rendered our player-list row, but the default list
+  was hidden and the local ship renderer omitted its name. Names view now starts
+  visible; the owner's requested own-ship label uses the server name (account name
+  fallback), bounty and ping. Low-energy and ball-countdown labels move below it.
+  This is a requested display change, not a claim of original-client pixel parity.
+- macOS gets runtime Option+P as an alternative Cycle binding, preserving F2 and
+  respecting any existing custom Option+P action. Alternate actions are deduplicated
+  and the larger chord suppresses the Alt map modifier. Cycle remains available
+  during chat entry. Host fnState was 1; the exact cause of the reported physical
+  F2 failure is not established. Actual macOS key delivery still needs owner retest.
+- Esc menu now explicitly handles F1 help, F2 list, F3 name tags, F4 radar and F5
+  messages. Menu-consumed bindings remain blocked until release so F3/F4/F5 cannot
+  inadvertently deploy a rocket/brick/decoy on the next frame. F8 remains engine
+  audio. Help ticker, arena-list UI, banner UI, ignore-macros and list-size controls
+  shown in the legacy menu are still unimplemented; this is not full menu parity.
+- Regression coverage: alternate binding conflicts/deduplication, menu-key release
+  blocking and player-list access during chat. Full tests pass (94 library, 2
+  frontend, 15 transport, 1 chat; one ignored unit; asset/live checks unconfigured).
+  Local Continuum GUI screenshots confirm names on ship/list at entry and Cycle
+  moving to Points. Clippy retains prior warnings; release and Windows check pass.
+  No public tests. Owner also requested the pending personal desktop remap: Space
+  guns, Shift+Space repel, Tab bombs. It is a local keyboard.dat change with backup;
+  repository default bindings remain the original layout.

@@ -61,6 +61,9 @@ pub struct Hud {
     spectate: Texture2D,
     /// F2 stat box view (0 names, 1 points, 2 point sort, 3 team sort, 4 W/L, 5 teams), or none.
     pub statbox: Option<u8>,
+    pub show_names: bool,
+    pub show_radar: bool,
+    pub show_messages: bool,
     /// The "ticked" player in the stat box (Page Up/Down), target of F7 attach. None = us.
     pub selected: Option<u16>,
     gradient: Texture2D,
@@ -100,7 +103,10 @@ impl Hud {
             disp: load_texture(assets, "disp"),
             led: load_texture(assets, "led"),
             spectate: load_texture(assets, "spectate"),
-            statbox: None,
+            statbox: Some(0),
+            show_names: true,
+            show_radar: true,
+            show_messages: true,
             selected: None,
             gradient: load_texture(assets, "gradient"),
             icons: load_texture(assets, "Icons"),
@@ -174,7 +180,9 @@ impl Hud {
             let (x, y) = ((sw / 2.0).floor(), (sh / 2.0).floor() - 48.0);
             self.text(&format!("Safety Time Left: {h}:{m:02}:{sec:02}"), TextColor::Yellow, x, y);
         }
-        self.radar(game, sw, sh);
+        if self.show_radar {
+            self.radar(game, sw, sh);
+        }
         self.chat(game, sw, sh);
         // Centre message area: arena enter/leave lines (blue) and kills (yellow) at (sw/6, sh*0.6), newest at the bottom.
         let (cx, cy) = ((sw / 6.0).floor(), (sh * 0.6).floor());
@@ -461,7 +469,7 @@ impl Hud {
             self.text(&format!("{shown_input}_"), TextColor::White, 0.0, y);
         }
         let start = lines.len().saturating_sub(shown);
-        for (text, color) in lines[start..].iter().rev() {
+        for (text, color) in lines[start..].iter().rev().filter(|_| self.show_messages) {
             y -= FONT_H;
             let clipped: String = text.chars().take(max_chars).collect();
             self.text(&clipped, *color, 0.0, y);
@@ -474,6 +482,9 @@ impl Hud {
     /// carrier's colour hasn't been seen yet and stays yellow).
     #[allow(clippy::too_many_arguments)]
     pub fn name_label(&self, name: &str, bounty: u16, flags: u16, ball: bool, ping_ms: u32, team: bool, energy: Option<(u16, u32)>, center: (f32, f32)) {
+        if !self.show_names {
+            return;
+        }
         // Enemy flag or ball carriers are dark red; a ball carrier gets " (Ball)" (reference client).
         let color = match (team, flags > 0 || ball) {
             (true, _) => TextColor::Yellow,
