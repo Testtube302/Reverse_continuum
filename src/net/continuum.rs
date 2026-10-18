@@ -49,6 +49,16 @@ impl ContinuumCipher {
 
     /// Checks framing and the packet CRC before returning plaintext.
     pub fn decrypt(&self, packet: &[u8]) -> Result<Vec<u8>, CipherError> {
+        self.decrypt_checked(packet, false)
+    }
+
+    /// Matches nullspace's receive compatibility for servers whose CRC is
+    /// calculated over repetitions of the first plaintext byte.
+    pub fn decrypt_compatible(&self, packet: &[u8]) -> Result<Vec<u8>, CipherError> {
+        self.decrypt_checked(packet, true)
+    }
+
+    fn decrypt_checked(&self, packet: &[u8], legacy_crc: bool) -> Result<Vec<u8>, CipherError> {
         if packet.len() < 2 || packet.len() > MAX_CIPHERTEXT {
             return Err(CipherError::InvalidLength);
         }
@@ -69,13 +79,15 @@ impl ContinuumCipher {
         }
         let mut data = encrypted.to_vec();
         self.transform(&mut data, true);
-        if crc8(&data[1..]) != data[0] {
+        if crc8(&data[1..]) != data[0]
+            && !(legacy_crc && crc8_iter(std::iter::repeat_n(data[1], data.len() - 1)) == data[0])
+        {
             return Err(CipherError::ChecksumMismatch);
         }
         Ok(data[1..].to_vec())
     }
 
-    fn transform(&self, data: &mut [u8], decrypt: bool) {
+    pub(super) fn transform(&self, data: &mut [u8], decrypt: bool) {
         let (mut lower, mut upper) = (0u32, 0u32);
         let mut offset = 0;
         while offset + 8 <= data.len() {
@@ -167,6 +179,10 @@ fn word(data: &[u8], offset: usize) -> u32 {
 
 // Reflected CRC-8/MAXIM polynomial, matching nullspace's lookup table.
 fn crc8(data: &[u8]) -> u8 {
+    crc8_iter(data.iter().copied())
+}
+
+fn crc8_iter(data: impl IntoIterator<Item = u8>) -> u8 {
     let mut crc = 0u8;
     for byte in data {
         crc ^= byte;
@@ -202,6 +218,46 @@ mod tests {
             let ciphertext = unhex(fields[2]);
             assert_eq!(cipher.encrypt(&plaintext).unwrap(), ciphertext);
             assert_eq!(cipher.decrypt(&ciphertext).unwrap(), plaintext);
+        }
+    }
+
+    #[test]
+    fn matches_reference_legacy_crc_and_rejects_other_checksums() {
+        let mut legacy_only = 0;
+        for line in include_str!("../../docs/research/continuum/legacy-crc-vectors.txt").lines() {
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let fields: Vec<_> = line.split_whitespace().collect();
+            let key_bytes = unhex(fields[0]);
+            let cipher = ContinuumCipher::from_final_session_table(std::array::from_fn(|i| {
+                word(&key_bytes, i * 4)
+            }));
+            let plaintext = unhex(fields[1]);
+            let ciphertext = unhex(fields[2]);
+            assert_eq!(cipher.decrypt_compatible(&ciphertext).unwrap(), plaintext);
+            if cipher.decrypt(&ciphertext) == Err(CipherError::ChecksumMismatch) {
+                legacy_only += 1;
+            }
+        }
+        assert!(legacy_only > 50);
+        let cipher = ContinuumCipher::from_final_session_table([0; 20]);
+        let plaintext = [0, 2];
+        let standard = crc8(&plaintext);
+        let legacy = crc8(&[0, 0]);
+        for checksum in 0..=255u8 {
+            if checksum == standard || checksum == legacy {
+                continue;
+            }
+            let mut encrypted = vec![checksum, 0, 2];
+            cipher.transform(&mut encrypted, false);
+            if needs_escape(&encrypted) {
+                encrypted.insert(0, 0xff);
+            }
+            assert_eq!(
+                cipher.decrypt_compatible(&encrypted),
+                Err(CipherError::ChecksumMismatch)
+            );
         }
     }
 

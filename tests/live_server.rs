@@ -1,5 +1,6 @@
 //! End-to-end tests against a running zone server (ASSS / Subspace Server .NET).
 //! Skipped unless AICONTINUUM_SERVER is set, e.g. AICONTINUUM_SERVER=127.0.0.1:5000.
+//! Set AICONTINUUM_TEST_EXPANDER to test Continuum with native identification.
 
 use std::time::{Duration, Instant};
 
@@ -17,6 +18,16 @@ fn config(name: &str) -> Config {
         password: "test".into(),
         arena: None,
         map_dir: std::env::temp_dir().join(format!("aicontinuum-maps-{}", std::process::id())),
+    }
+}
+
+fn connect(config: Config) -> std::io::Result<Session> {
+    if let Some(program) = std::env::var_os("AICONTINUUM_TEST_EXPANDER") {
+        let mut expander = aicontinuum::net::continuum_expander::CommandExpander::new(program.into());
+        let identity = aicontinuum::net::native_identity::prepare(|nonce| expander.expand_identity(nonce))?;
+        Session::connect_continuum_identified(config, move |seed| expander.expand(seed).ok(), identity)
+    } else {
+        Session::connect(config)
     }
 }
 
@@ -43,7 +54,7 @@ fn logs_in_enters_arena_and_downloads_map() {
     if server().is_none() {
         return;
     }
-    let mut s = Session::connect(config("AIC-Test1")).unwrap();
+    let mut s = connect(config("AIC-Test1")).unwrap();
     let ok = pump_until(&mut [&mut s], 15, |s| s[0].ready());
     assert!(ok, "did not become ready; log: {:#?}", s.log);
 
@@ -89,7 +100,7 @@ fn answers_periodic_security_check() {
     if server().is_none() {
         return;
     }
-    let mut s = Session::connect(config("AIC-Sec")).unwrap();
+    let mut s = connect(config("AIC-Sec")).unwrap();
     let ok = pump_until(&mut [&mut s], 75, |s| s[0].ready() && s[0].security_replies > 0);
     assert!(ok, "no security exchange; log: {:#?}", s.log);
     s.disconnect();
@@ -100,8 +111,8 @@ fn two_clients_see_each_other_fly() {
     if server().is_none() {
         return;
     }
-    let mut a = Session::connect(config("AIC-Pilot")).unwrap();
-    let mut b = Session::connect(config("AIC-Watcher")).unwrap();
+    let mut a = connect(config("AIC-Pilot")).unwrap();
+    let mut b = connect(config("AIC-Watcher")).unwrap();
     assert!(
         pump_until(&mut [&mut a, &mut b], 15, |s| s.iter().all(|s| s.ready())),
         "not ready\nA: {:#?}\nB: {:#?}",
@@ -167,6 +178,45 @@ fn two_clients_see_each_other_fly() {
     b.disconnect();
 }
 
+#[test]
+fn public_chat_is_delivered_and_shown_once_to_the_sender() {
+    if server().is_none() {
+        return;
+    }
+    let mut sender = connect(config("AIC-ChatSend")).unwrap();
+    let mut receiver = connect(config("AIC-ChatRecv")).unwrap();
+    assert!(pump_until(&mut [&mut sender, &mut receiver], 15, |s| s.iter().all(|s| s.ready())));
+    let pid = sender.pid.unwrap();
+    let message = "Local chat delivery regression";
+    sender.send_public_chat(message);
+    let delivered = pump_until(&mut [&mut sender, &mut receiver], 5, |s| {
+        s[1].chat.iter().any(|c| c.kind == 2 && c.pid == pid && c.text == message)
+    });
+    // Allow a server echo, if any, to arrive before checking for duplication.
+    pump_until(&mut [&mut sender, &mut receiver], 1, |_| false);
+    let count = |s: &Session| s.chat.iter().filter(|c| c.kind == 2 && c.pid == pid && c.text == message).count();
+    let (shown, received) = (count(&sender), count(&receiver));
+    sender.disconnect();
+    receiver.disconnect();
+    assert!(delivered, "public message did not reach the other local client");
+    assert_eq!(received, 1, "receiver should show one copy");
+    assert_eq!(shown, 1, "sender must show its own message locally");
+}
+
+#[test]
+fn requests_and_receives_current_arena_list() {
+    if server().is_none() { return; }
+    let mut session = connect(config("AIC-ArenaList")).unwrap();
+    assert!(pump_until(&mut [&mut session], 15, |s| s[0].ready()));
+    session.request_arena_list();
+    let received = pump_until(&mut [&mut session], 5, |s| s[0].arena_list.is_some());
+    session.disconnect();
+    assert!(received, "server did not return an arena list");
+    let arenas = session.arena_list.as_ref().unwrap();
+    assert!(arenas.iter().any(|a| a.current && a.players >= 1));
+    assert!(!session.chat.iter().any(|c| c.text == "?arena"), "command must not be locally echoed");
+}
+
 /// Full combat round trip: B shoots A until A's client registers the damage, dies and tells
 /// the server, and the server announces the kill back to B.
 #[test]
@@ -177,8 +227,8 @@ fn shots_kill_and_server_reports_the_kill() {
     if server().is_none() {
         return;
     }
-    let mut a = Game::online(Session::connect(config("AIC-Target")).unwrap());
-    let mut b = Game::online(Session::connect(config("AIC-Gunner")).unwrap());
+    let mut a = Game::online(connect(config("AIC-Target")).unwrap());
+    let mut b = Game::online(connect(config("AIC-Gunner")).unwrap());
     let pump = |a: &mut Game, b: &mut Game, secs: u64, mut done: Box<dyn FnMut(&Game, &Game) -> bool>| {
         let end = Instant::now() + Duration::from_secs(secs);
         let mut next = Instant::now();

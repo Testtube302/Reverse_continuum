@@ -12,9 +12,9 @@ use aicontinuum::launcher::Action;
 use aicontinuum::lvl::{Map, TILE_PIXELS};
 use aicontinuum::net::session::{Config, Phase, SPECTATOR, Session};
 use aicontinuum::settings::ArenaSettings;
-use aicontinuum::sim::{Input, TICK_SECONDS, Vec2};
+use aicontinuum::sim::{EngineState, Input, TICK_SECONDS, Vec2};
 use aicontinuum::weapons::{Weapon, WeaponKind};
-use macroquad::audio::{PlaySoundParams, Sound, load_sound_from_bytes, play_sound};
+use macroquad::audio::{PlaySoundParams, Sound, load_sound_from_bytes, play_sound, stop_sound};
 use macroquad::prelude::*;
 
 const TILESET_COLUMNS: u32 = 19;
@@ -92,7 +92,7 @@ fn parse_args() -> Args {
         mute: false,
         at: None,
         menu: false,
-        statbox: None,
+        statbox: Some(0),
         help: None,
         follow: None,
         freq: None,
@@ -321,23 +321,142 @@ impl Graphics {
 struct Sounds {
     clips: HashMap<String, Option<Sound>>,
     muted: bool,
+    engine_enabled: bool,
+    engine: Option<&'static str>,
 }
 
 impl Sounds {
+    async fn load(&mut self, assets: &AssetDir, name: &str) {
+        if !self.clips.contains_key(name) {
+            let clip = match assets.sound(name) {
+                Ok(bytes) => match load_sound_from_bytes(&bytes).await {
+                    Ok(sound) => Some(sound),
+                    Err(err) => {
+                        eprintln!("Could not decode sound {name}: {err:?}");
+                        None
+                    }
+                },
+                Err(err) => {
+                    eprintln!("Could not load sound {name}: {err}");
+                    None
+                }
+            };
+            self.clips.insert(name.to_string(), clip);
+        }
+    }
+
     async fn play(&mut self, assets: &AssetDir, name: &str, volume: f32) {
         if self.muted || volume <= 0.0 {
             return;
         }
-        if !self.clips.contains_key(name) {
-            let clip = match assets.sound(name) {
-                Ok(bytes) => load_sound_from_bytes(&bytes).await.ok(),
-                Err(_) => None,
-            };
-            self.clips.insert(name.to_string(), clip);
-        }
+        self.load(assets, name).await;
         if let Some(Some(s)) = self.clips.get(name) {
             play_sound(s, PlaySoundParams { looped: false, volume });
         }
+    }
+
+    async fn update_engine(&mut self, assets: &AssetDir, game: &Game) {
+        let wanted = if self.muted || !self.engine_enabled { None } else { engine_clip(game) };
+        if wanted == self.engine {
+            return; // Keep the current loop running instead of restarting every frame.
+        }
+        self.stop_engine();
+        if let Some(name) = wanted {
+            self.load(assets, name).await;
+            if let Some(Some(sound)) = self.clips.get(name) {
+                play_sound(sound, PlaySoundParams { looped: true, volume: 1.0 });
+            }
+        }
+        self.engine = wanted;
+    }
+
+    fn stop_engine(&mut self) {
+        if let Some(name) = self.engine.take()
+            && let Some(Some(sound)) = self.clips.get(name)
+        {
+            stop_sound(sound);
+        }
+    }
+}
+
+impl Drop for Sounds {
+    fn drop(&mut self) {
+        self.stop_engine(); // Returning to the launcher must not leave a loop playing.
+    }
+}
+
+fn engine_clip(game: &Game) -> Option<&'static str> {
+    if !game.alive() || game.session.as_ref().is_some_and(|s| !s.ready()) {
+        return None;
+    }
+    match game.ship.as_ref()?.engine_state {
+        EngineState::Idle => Some("hum"),
+        EngineState::Thrust => Some("rev"),
+        EngineState::Afterburner => Some("thrust"),
+        EngineState::Rocket => Some("rocket2"),
+        EngineState::Disabled => None,
+    }
+}
+
+#[derive(Default)]
+struct GameKeys {
+    held: Vec<String>,
+    menu_blocked: Vec<String>,
+}
+
+impl GameKeys {
+    fn update(&mut self, raw: Vec<String>, typing: bool, menu_open: bool, menu_consumed: bool) -> (Vec<String>, Vec<String>) {
+        self.menu_blocked.retain(|action| raw.contains(action));
+        if menu_consumed {
+            self.menu_blocked = raw.clone();
+        }
+        let active: Vec<String> = raw.iter()
+            .filter(|action| !menu_open && !self.menu_blocked.contains(action) && (!typing || action.as_str() == "Cycle"))
+            .cloned().collect();
+        let pressed = active.iter().filter(|action| !self.held.contains(action)).cloned().collect();
+        self.held = raw;
+        (active, pressed)
+    }
+}
+
+#[cfg(test)]
+mod audio_tests {
+    use super::*;
+
+    #[test]
+    fn menu_keys_stay_consumed_until_release_and_chat_allows_player_list() {
+        let mut keys = GameKeys::default();
+        let rocket = || vec!["Rocket".into()];
+        assert!(keys.update(rocket(), false, false, true).0.is_empty());
+        assert!(keys.update(rocket(), false, false, false).0.is_empty());
+        keys.update(Vec::new(), false, false, false);
+        assert_eq!(keys.update(rocket(), false, false, false), (rocket(), rocket()));
+        keys.update(Vec::new(), true, false, false);
+        assert_eq!(keys.update(vec!["Cycle".into(), "Bullet".into()], true, false, false),
+            (vec!["Cycle".to_owned()], vec!["Cycle".to_owned()]));
+    }
+
+    #[test]
+    fn engine_audio_follows_simulation_and_stops_for_death_or_spectating() {
+        let mut game = Game::offline(Map::empty(), ArenaSettings::default(), 0);
+        let forward = Input { forward: true, ..Default::default() };
+        game.tick(forward);
+        assert_eq!(engine_clip(&game), Some("rev"));
+        game.tick(Input { afterburner: true, ..forward });
+        assert_eq!(engine_clip(&game), Some("thrust"));
+        game.tick(Input::default());
+        assert_eq!(engine_clip(&game), Some("hum"));
+        game.ship.as_mut().unwrap().shutdown_ticks = 1;
+        game.tick(forward);
+        assert_eq!(engine_clip(&game), None);
+        game.tick(forward);
+        assert_eq!(engine_clip(&game), Some("rev"));
+        game.dead_ticks = 10;
+        assert_eq!(engine_clip(&game), None);
+        game.request_ship(SPECTATOR);
+        assert_eq!(engine_clip(&game), None);
+        game.request_ship(0);
+        assert_eq!(engine_clip(&game), Some("hum"));
     }
 }
 
@@ -547,7 +666,10 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
     let gfx = Graphics::load(&assets);
     let mut hud = hud::Hud::load(&assets);
     hud.statbox = args.statbox;
-    let mut sounds = Sounds { clips: HashMap::new(), muted: args.mute || args.screenshot.is_some() };
+    let mut sounds = Sounds {
+        clips: HashMap::new(), muted: args.mute || args.screenshot.is_some(),
+        engine_enabled: true, engine: None,
+    };
 
     let mut game = match args.connect {
         Some(server) => {
@@ -561,10 +683,14 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
             };
             let session = if let Some(program) = &args.continuum_expander {
                 let mut expander = aicontinuum::net::continuum_expander::CommandExpander::new(program.clone());
-                Session::connect_continuum(config, move |seed| match expander.expand(seed) {
-                    Ok(table) => Some(table),
-                    Err(error) => { eprintln!("Continuum expansion: {error}"); None }
-                }, [0; 64])
+                aicontinuum::net::native_identity::prepare(|nonce| expander.expand_identity(nonce))
+                    .and_then(|identity| {
+                        eprintln!("[Session] native identity prepared; Windows-only fields unavailable");
+                        Session::connect_continuum_identified(config, move |seed| match expander.expand(seed) {
+                            Ok(table) => Some(table),
+                            Err(error) => { eprintln!("Continuum expansion: {error}"); None }
+                        }, identity)
+                    })
             } else {
                 Session::connect(config)
             };
@@ -602,15 +728,21 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
     let mut scripted_ticks = 0u32;
     let mut fire_held = false;
     let mut menu_open = args.menu;
+    let mut arena_list_open = false;
+    let mut arena_list_offset = 0usize;
+    let mut arena_requested_at = 0.0;
     let mut help_page: Option<usize> = args.help;
     // The profile's key definitions and macros from keyboard.dat / macro.dat.
-    let keyset = assets
+    let mut keyset = assets
         .read("keyboard.dat")
         .map(|b| keys::parse_keysets(&String::from_utf8_lossy(&b)))
         .unwrap_or_default()
         .into_iter()
         .find(|k| k.name == args.keyset)
         .unwrap_or_else(|| KeySet::defaults("Default"));
+    if cfg!(target_os = "macos") {
+        keyset.add_alternate("Cycle", keys::Binding::parse("Alt P"));
+    }
     let macros = assets
         .read("macro.dat")
         .map(|b| keys::parse_macros(&String::from_utf8_lossy(&b)))
@@ -618,15 +750,36 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
         .into_iter()
         .find(|m| m.name == args.macroset)
         .unwrap_or_else(|| MacroSet::empty("Default"));
-    let mut held_actions: Vec<String> = Vec::new();
+    let mut game_keys = GameKeys::default();
     let mut last_ship: u8 = args.ship.unwrap_or(0);
 
     loop {
         // Chat entry: Enter opens/sends, Esc cancels; while typing, keys go to the message.
         let typing = hud.chat_input.is_some();
+        if !typing && is_key_pressed(KeyCode::F8)
+            && !key_down(Key::Shift) && !key_down(Key::Ctrl) && !key_down(Key::Alt)
+        {
+            sounds.engine_enabled = !sounds.engine_enabled;
+            game.notices.push(format!("Engine sounds {}", if sounds.engine_enabled { "on" } else { "off" }));
+        }
         // Esc menu: Q quits, 1-8/S pick a ship, any other key resumes.
-        if menu_open {
+        let mut menu_cycle = false;
+        let mut menu_help = false;
+        let mut menu_arena = false;
+        let mut menu_consumed = false;
+        if arena_list_open {
+            menu_consumed = true;
+            if is_key_pressed(KeyCode::Escape) { arena_list_open = false; }
+            if is_key_pressed(KeyCode::Up) || mouse_wheel().1 > 0.0 {
+                arena_list_offset = arena_list_offset.saturating_sub(1);
+            }
+            if is_key_pressed(KeyCode::Down) || mouse_wheel().1 < 0.0 {
+                arena_list_offset = arena_list_offset.saturating_add(1);
+            }
+            while get_char_pressed().is_some() {}
+        } else if menu_open {
             if let Some(key) = get_last_key_pressed() {
+                menu_consumed = true;
                 menu_open = false;
                 let ships = [KeyCode::Key1, KeyCode::Key2, KeyCode::Key3, KeyCode::Key4, KeyCode::Key5, KeyCode::Key6, KeyCode::Key7, KeyCode::Key8];
                 if key == KeyCode::Q {
@@ -635,6 +788,16 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
                     game.request_ship(i as u8);
                 } else if key == KeyCode::S {
                     game.request_ship(SPECTATOR);
+                } else {
+                    match key {
+                        KeyCode::F1 => menu_help = true,
+                        KeyCode::F2 => menu_cycle = true,
+                        KeyCode::F3 => hud.show_names = !hud.show_names,
+                        KeyCode::F4 => hud.show_radar = !hud.show_radar,
+                        KeyCode::F5 => hud.show_messages = !hud.show_messages,
+                        KeyCode::A => menu_arena = true,
+                        _ => {}
+                    }
                 }
             }
             while get_char_pressed().is_some() {}
@@ -646,7 +809,7 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
                 while get_char_pressed().is_some() {}
             }
         }
-        if is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::KpEnter) {
+        if !menu_consumed && (is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::KpEnter)) {
             match hud.chat_input.take() {
                 Some(text) if !text.trim().is_empty() => {
                     if let Some(s) = game.session.as_mut() {
@@ -659,15 +822,16 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
                 None => hud.chat_input = Some(String::new()),
             }
         }
-        // Bindings held this frame (none while typing or in the Esc menu) and the newly pressed ones.
-        let active: Vec<String> = if typing || menu_open {
-            Vec::new()
-        } else {
-            keyset.active(key_down).into_iter().map(String::from).collect()
-        };
-        let mut pressed: Vec<String> = active.iter().filter(|a| !held_actions.contains(a)).cloned().collect();
+        // Chat permits the player-list action; consumed menu keys never fire weapons.
+        let raw = keyset.active(key_down).into_iter().map(String::from).collect();
+        let (active, mut pressed) = game_keys.update(raw, typing, menu_open, menu_consumed);
+        if menu_cycle {
+            pressed.push("Cycle".into());
+        }
+        if menu_arena {
+            pressed.push("ArenaList".into());
+        }
         pressed.extend(args.press.iter().filter(|(_, f)| *f == frame).map(|(a, _)| a.clone()));
-        held_actions = active.clone();
         let ctrl_or_alt = key_down(Key::Ctrl) || key_down(Key::Alt);
         while let Some(c) = get_char_pressed() {
             // Without "Require Msg Key", typing a character starts a message, as in the original.
@@ -759,10 +923,10 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
         // 1-8 / S pick a ship directly only when typing doesn't start a message.
         if keyset.req_msg_key {
             let ship_keys = [KeyCode::Key1, KeyCode::Key2, KeyCode::Key3, KeyCode::Key4, KeyCode::Key5, KeyCode::Key6, KeyCode::Key7, KeyCode::Key8];
-            if let Some(i) = ship_keys.iter().position(|k| is_key_pressed(*k)).filter(|_| !typing && !menu_open) {
+            if let Some(i) = ship_keys.iter().position(|k| is_key_pressed(*k)).filter(|_| !typing && !menu_open && !menu_consumed) {
                 game.request_ship(i as u8);
             }
-            if !typing && !menu_open && is_key_pressed(KeyCode::S) && !is_key_down(KeyCode::Tab) {
+            if !typing && !menu_open && !menu_consumed && is_key_pressed(KeyCode::S) && !is_key_down(KeyCode::Tab) {
                 game.request_ship(SPECTATOR);
             }
         }
@@ -773,6 +937,16 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
             use aicontinuum::sim::{STATUS_ANTIWARP, STATUS_CLOAK, STATUS_STEALTH, STATUS_XRADAR};
             for a in &pressed {
                 match a.as_str() {
+                    "ArenaList" => {
+                        if let Some(s) = game.session.as_mut() {
+                            s.request_arena_list();
+                            arena_list_open = true;
+                            arena_list_offset = 0;
+                            arena_requested_at = get_time();
+                        } else {
+                            game.notices.push("Arena list is only available while connected to a zone.".into());
+                        }
+                    }
                     "Stealth" => game.toggle_status(STATUS_STEALTH),
                     "Cloak" => game.toggle_status(STATUS_CLOAK),
                     "XRadar" => game.toggle_status(STATUS_XRADAR),
@@ -804,7 +978,7 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
                 }
             }
         }
-        if !typing && !menu_open && is_key_pressed(KeyCode::F1) {
+        if menu_help || (!typing && !menu_open && !menu_consumed && is_key_pressed(KeyCode::F1)) {
             // F1 pages through help, closing after the last page.
             help_page = match help_page {
                 None => Some(0),
@@ -834,7 +1008,7 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
                     scripted_ticks += 1;
                 }
             } else {
-                let active_refs: Vec<&str> = held_actions.iter().map(|s| s.as_str()).collect();
+                let active_refs: Vec<&str> = active.iter().map(|s| s.as_str()).collect();
                 let mut input = if typing { Input::default() } else { read_input(&active_refs) };
                 // Held for 20 frames: a frame can pass without a game tick at high frame rates.
                 if args.throw_after.is_some_and(|f| frame >= f && frame < f + 20) {
@@ -869,6 +1043,9 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
             if menu_open {
                 hud::draw_menu(&hud);
             }
+            if arena_list_open {
+                hud::draw_arena_list(&hud, &game, &mut arena_list_offset, get_time() - arena_requested_at > 10.0);
+            }
         } else {
             clear_background(BLACK);
             let status = match game.session.as_ref().map(|s| &s.phase) {
@@ -876,9 +1053,12 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
                 Some(p) => format!("{p:?}... {}", game.session.as_ref().and_then(|s| s.log.last()).cloned().unwrap_or_default()),
                 None => String::new(),
             };
-            draw_text(&status, 8.0, 16.0, 16.0, GREEN);
+            for (line, text) in status.lines().enumerate() {
+                draw_text(text, 8.0, 16.0 + line as f32 * 18.0, 16.0, GREEN);
+            }
         }
 
+        sounds.update_engine(assets, &game).await;
         for cue in std::mem::take(&mut game.sounds) {
             let d = cue.position.sub(game.camera).length();
             sounds.play(&assets, &cue.name, (1.0 - d / HEARING_RANGE).clamp(0.0, 1.0)).await;
@@ -1155,13 +1335,22 @@ fn draw_world(game: &Game, tiles: &Tiles, gfx: &Graphics, hud: &mut hud::Hud) {
             let low = ship.energy * 2.0 < ship.max_energy as f32;
             draw_turrets(gfx, hud, game, pid, (x, y), view_freq(game), if low { 2 } else { 1 });
         }
-        // Carrying a ball with a throw timer: seconds left in red where our label would be.
-        if let Some(t) = game.carry_ticks {
-            hud.text(&format!("{:.1}", t as f32 / 100.0), hud::TextColor::Red, x + 14.0, y + 14.0);
+        let name_line = if riding { hud::FONT_H } else { 0.0 };
+        let mut status_line = name_line;
+        if hud.show_names && let Some(s) = &game.session {
+            let me = s.me();
+            let name = me.map_or(s.config.name.as_str(), |p| p.name.as_str());
+            hud.name_label(name, ship.bounty as u16, me.map_or(0, |p| p.flags_carried),
+                s.pid.is_some_and(|pid| game.soccer.carried_by(pid).is_some()),
+                me.map_or(0, |p| p.ping as u32 * 10), true, None, (x, y + name_line));
+            status_line += hud::FONT_H;
         }
-        // Riding as a turret, our energy goes one line below the carrier's label.
-        let line = if riding { 12.0 } else { 0.0 };
-        hud.own_energy_label(ship.energy as u32, ship.max_energy, (x, y + line));
+        // Keep the ball countdown and low-energy warning clear of our name.
+        if let Some(t) = game.carry_ticks {
+            hud.text(&format!("{:.1}", t as f32 / 100.0), hud::TextColor::Red, x + 14.0, y + 14.0 + status_line);
+            status_line += hud::FONT_H;
+        }
+        hud.own_energy_label(ship.energy as u32, ship.max_energy, (x, y + status_line));
     }
 
     for (tx, ty) in visible_tiles() {

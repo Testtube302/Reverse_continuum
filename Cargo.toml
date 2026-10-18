@@ -9,5 +9,8 @@ path = "src/main.rs"
 
 [dependencies]
 image = { version = "0.25.10", default-features = false, features = ["png", "gif"] }
-macroquad = "0.4.16"
+macroquad = { version = "0.4.16", features = ["audio"] }
 miniz_oxide = "0.9.1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2.190"

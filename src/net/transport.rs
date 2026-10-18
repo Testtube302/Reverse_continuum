@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use super::vie::Vie;
 use super::continuum::{ContinuumCipher, MAX_CIPHERTEXT};
@@ -30,6 +30,35 @@ fn tick_diff(a: u32, b: u32) -> i32 {
 
 fn u32_at(p: &[u8], o: usize) -> Option<u32> {
     p.get(o..o + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+}
+
+// Metadata only: never include packet bodies, challenge seeds, or credentials.
+fn packet_metadata(packet: &[u8], depth: usize) -> String {
+    let Some(&kind) = packet.first() else { return "empty".into() };
+    if kind != 0 { return format!("game={kind:02x} len={}", packet.len()); }
+    let Some(&core) = packet.get(1) else { return "truncated core".into() };
+    let mut text = format!("core={core:02x} len={}", packet.len());
+    if matches!(core, 3 | 4) {
+        text.push_str(&format!(" id={:?}", u32_at(packet, 2)));
+    }
+    if core == 0x0a { text.push_str(&format!(" total={:?}", u32_at(packet, 2))); }
+    if depth >= 8 { return text; }
+    if core == 3 && packet.len() >= RELIABLE_HEADER {
+        text.push_str(&format!(" [{}]", packet_metadata(&packet[RELIABLE_HEADER..], depth + 1)));
+    }
+    if core == 0x0e {
+        let mut offset = 2;
+        while offset < packet.len() {
+            let size = packet[offset] as usize;
+            let Some(inner) = packet.get(offset + 1..offset + 1 + size) else {
+                text.push_str(" [truncated cluster]");
+                break;
+            };
+            text.push_str(&format!(" [{}]", packet_metadata(inner, depth + 1)));
+            offset += size + 1;
+        }
+    }
+    text
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,9 +87,12 @@ struct ContinuumSession {
     keys: Option<(u32, u32)>,
     cipher: Option<ContinuumCipher>,
     expand: Box<dyn FnMut(u32) -> Option<[u32; 20]> + Send>,
+    diagnostic_packets: u32,
 }
 
 pub struct Transport {
+    trace_started: Option<Instant>,
+    trace_count: u32,
     sock: UdpSocket,
     vie: Vie,
     continuum: Option<ContinuumSession>,
@@ -100,6 +132,7 @@ impl Transport {
             keys: None,
             cipher: None,
             expand: Box::new(expand),
+            diagnostic_packets: 0,
         }))
     }
 
@@ -110,6 +143,8 @@ impl Transport {
         sock.set_nonblocking(true)?;
         let now = now_tick();
         let mut t = Self {
+            trace_started: (std::env::var_os("AICONTINUUM_TRACE").as_deref() == Some(std::ffi::OsStr::new("1"))).then(Instant::now),
+            trace_count: 0,
             sock,
             vie: Vie::new(now ^ std::process::id().rotate_left(16)),
             continuum,
@@ -131,6 +166,18 @@ impl Transport {
         };
         t.send_encryption_request(now);
         Ok(t)
+    }
+
+    fn trace(&mut self, message: impl FnOnce() -> String) {
+        if let Some(started) = self.trace_started {
+            if self.trace_count < 8192 {
+                eprintln!("[NetTrace +{}ms] {}", started.elapsed().as_millis(), message());
+                self.trace_count += 1;
+            } else if self.trace_count == 8192 {
+                eprintln!("[NetTrace] trace limit reached (8192 events)");
+                self.trace_count += 1;
+            }
+        }
     }
 
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
@@ -161,6 +208,7 @@ impl Transport {
     }
 
     fn send_raw(&mut self, data: &[u8]) {
+        self.trace(|| format!("TX {}", packet_metadata(data, 0)));
         let buf = if let Some(cont) = &self.continuum {
             let Some(cipher) = &cont.cipher else { return };
             let Ok(buf) = cipher.encrypt(data) else { return };
@@ -175,7 +223,8 @@ impl Transport {
 
     fn send_wire(&mut self, buf: &[u8]) {
         // A full socket buffer just drops the datagram, as UDP would.
-        let _ = self.sock.send(buf);
+        let result = self.sock.send(buf);
+        self.trace(|| format!("UDP send len={} result={result:?}", buf.len()));
         self.packets_sent = self.packets_sent.wrapping_add(1);
     }
 
@@ -195,12 +244,14 @@ impl Transport {
         }
         let key1 = u32_at(packet, 2).unwrap();
         let key2 = u32_at(packet, 6).unwrap();
+        eprintln!("[Continuum] received encryption challenge; expanding session key");
         let Some(table) = (cont.expand)(key2) else {
             self.fail("Continuum key expansion is unavailable; no session table was supplied");
             return;
         };
         cont.cipher = Some(ContinuumCipher::from_expanded_table(table, key1));
         cont.keys = Some((key1, key2));
+        eprintln!("[Continuum] key expansion complete; sending acknowledgement");
         let now = now_tick();
         self.packets_received = self.packets_received.wrapping_add(1);
         self.last_recv_tick = now;
@@ -255,10 +306,12 @@ impl Transport {
         loop {
             match self.sock.recv(&mut buf) {
                 Ok(n) if n > 0 => {
+                    self.trace(|| format!("UDP receive len={n}"));
                     // Continuum adds a CRC and possibly an escape byte. Keep the
                     // receive buffer larger than either limit to detect truncation.
                     let limit = if self.continuum.is_some() { MAX_CIPHERTEXT } else { MAX_PACKET };
                     if n > limit || self.state == State::Disconnected {
+                        self.trace(|| format!("RX ignored: oversize or disconnected (limit={limit})"));
                         continue;
                     }
                     let pkt = if let Some(cont) = &self.continuum {
@@ -267,13 +320,27 @@ impl Transport {
                             continue;
                         }
                         let Some(cipher) = &cont.cipher else { continue };
-                        let Ok(pkt) = cipher.decrypt(&buf[..n]) else { continue };
-                        pkt
+                        let decoded = cipher.decrypt_compatible(&buf[..n]);
+                        if cont.diagnostic_packets < 32 {
+                            match &decoded {
+                                Ok(pkt) => eprintln!("[Continuum] received packet: wire length {n}, decoded length {}, header {:?}", pkt.len(), pkt.get(..2)),
+                                Err(error) => eprintln!("[Continuum] discarded packet: wire length {n}, {error:?}"),
+                            }
+                            self.continuum.as_mut().unwrap().diagnostic_packets += 1;
+                        }
+                        match decoded {
+                            Ok(pkt) => pkt,
+                            Err(error) => {
+                                self.trace(|| format!("RX rejected: {error:?}"));
+                                continue;
+                            }
+                        }
                     } else {
                         let mut pkt = buf[..n].to_vec();
                         self.vie.decrypt(&mut pkt);
                         pkt
                     };
+                    self.trace(|| format!("RX {}", packet_metadata(&pkt, 0)));
                     // Do not deliver game packets or process reliable/chunk state
                     // until the server has acknowledged the encryption session.
                     if matches!(self.state, State::Handshake { .. })
@@ -305,6 +372,11 @@ impl Transport {
 
     fn fail(&mut self, why: &str) {
         if self.state != State::Disconnected {
+            self.trace(|| format!("disconnect: {why}"));
+            eprintln!("[Connection] {why}");
+            eprintln!("[Connection] transfer state: huge bytes {}, small bytes {}, next reliable {}, buffered reliable {}, first buffered {:?}, unacked outgoing {}",
+                self.huge_chunk.len(), self.small_chunk.len(), self.next_expected_id,
+                self.pending_in.len(), self.pending_in.keys().next(), self.unacked.len());
             self.state = State::Disconnected;
             self.events.push_back(Event::Disconnected(why.to_string()));
         }
@@ -377,26 +449,36 @@ impl Transport {
         }
         let Some(&kind) = pkt.get(1) else { return };
         match kind {
-            0x12 if self.state == State::Connected && pkt.len() == 6 => {
+            // Like nullspace's ContinuumKeyExpansionRequest handler, read the
+            // seed prefix and allow trailing bytes. Exact-length gating silently
+            // drops padded challenges and leaves the server waiting for a reply.
+            0x12 if self.state == State::Connected && pkt.len() >= 6 => {
                 let seed = u32_at(pkt, 2).unwrap();
+                eprintln!("[Continuum] received session key challenge ({} bytes)", pkt.len());
                 if let Some(cont) = self.continuum.as_mut() {
                     if let Some(table) = (cont.expand)(seed) {
-                        let mut response = vec![0, 0x13];
+                        // Original 0.40 capture and TWCore protocol docs: the
+                        // response has a u16 version before the seed (88 bytes).
+                        let mut response = vec![0, 0x13, 0, 0];
                         response.extend_from_slice(&seed.to_le_bytes());
                         for word in table {
                             response.extend_from_slice(&word.to_le_bytes());
                         }
                         self.send_raw(&response);
+                        eprintln!("[Continuum] sent session key challenge response");
                     } else {
                         self.fail("Continuum key expansion challenge could not be answered");
                     }
                 }
             }
             0x02 => {
-                if let (State::Handshake { .. }, Some(key)) = (self.state, u32_at(pkt, 2)) {
+                if matches!(self.state, State::Handshake { .. }) {
                     let valid = if let Some(cont) = &self.continuum {
-                        cont.cipher.is_some() && key == 0
+                        // Continuum has already exchanged keys. Unlike VIE, its
+                        // encrypted 00 02 does not require a key field or zero body.
+                        cont.cipher.is_some()
                     } else {
+                        let Some(key) = u32_at(pkt, 2) else { return };
                         self.vie.initialize(key)
                     };
                     if valid {
@@ -456,6 +538,8 @@ impl Transport {
             0x0A => {
                 let Some(total) = u32_at(pkt, 2) else { return };
                 self.huge_chunk.extend_from_slice(&pkt[6..]);
+                let received = self.huge_chunk.len();
+                self.trace(|| format!("download bytes={received}/{total}"));
                 if self.huge_chunk.len() >= total as usize {
                     let whole = std::mem::take(&mut self.huge_chunk);
                     self.handle(&whole);
@@ -483,6 +567,19 @@ impl Transport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trace_metadata_excludes_credentials_keys_and_payloads() {
+        let login = [vec![0x24], b"secret-password".to_vec()].concat();
+        assert_eq!(packet_metadata(&login, 0), "game=24 len=16");
+        let challenge = [0, 0x12, 0xde, 0xad, 0xbe, 0xef];
+        assert_eq!(packet_metadata(&challenge, 0), "core=12 len=6");
+        let wrapped = [vec![0, 3, 42, 0, 0, 0], login].concat();
+        assert_eq!(packet_metadata(&wrapped, 0), "core=03 len=22 id=Some(42) [game=24 len=16]");
+        let cluster = [0, 0x0e, 6, 0, 4, 42, 0, 0, 0];
+        assert_eq!(packet_metadata(&cluster, 0), "core=0e len=9 [core=04 len=6 id=Some(42)]");
+        assert!(packet_metadata(&[0, 0x0e, 9], 0).contains("truncated cluster"));
+    }
 
     /// A fake server socket paired with a transport, without encryption (server echoes the key).
     fn pair() -> (Transport, UdpSocket, SocketAddr) {

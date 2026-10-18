@@ -255,10 +255,23 @@ impl KeySet {
         }
     }
 
+    /// Runtime-only alternative; never replace a saved binding or steal another action's chord.
+    pub fn add_alternate(&mut self, action: &str, binding: Binding) {
+        if !binding.0.is_empty() && !self.bindings.iter().any(|(_, b)| *b == binding) {
+            self.bindings.push((action.into(), binding));
+        }
+    }
+
     /// Actions whose bindings are held now, minus those covered by a larger held binding.
     pub fn active(&self, is_down: impl Fn(Key) -> bool) -> Vec<&str> {
         let held: Vec<&(String, Binding)> = self.bindings.iter().filter(|(_, b)| b.down(&is_down)).collect();
-        held.iter().filter(|(_, b)| !held.iter().any(|(_, o)| b.within(o))).map(|(a, _)| a.as_str()).collect()
+        let mut active = Vec::new();
+        for (action, _) in held.iter().filter(|(_, b)| !held.iter().any(|(_, o)| b.within(o))) {
+            if !active.contains(&action.as_str()) {
+                active.push(action.as_str());
+            }
+        }
+        active
     }
 
     /// Actions sharing a binding with another action.
@@ -362,6 +375,24 @@ pub fn write_macros(sets: &[MacroSet]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn alternate_player_list_binding_preserves_f2_and_suppresses_map_modifier() {
+        let mut set = KeySet::defaults("Default");
+        set.add_alternate("Cycle", Binding::parse("Alt P"));
+        assert_eq!(set.get("Cycle").name(), "F2");
+        assert_eq!(set.active(|k| [Key::Alt, Key::Char('P')].contains(&k)), ["Cycle"]);
+        assert_eq!(set.active(|k| k == Key::F(2)), ["Cycle"]);
+        assert_eq!(set.active(|k| [Key::F(2), Key::Alt, Key::Char('P')].contains(&k)), ["Cycle"]);
+        assert_eq!(set.active(|k| k == Key::Alt), ["ViewMap"]);
+        let count = set.bindings.len();
+        set.add_alternate("Cycle", Binding::parse("Alt P"));
+        assert_eq!(set.bindings.len(), count);
+        let mut custom = KeySet::defaults("Custom");
+        custom.set("Portal", Binding::parse("Alt P"));
+        custom.add_alternate("Cycle", Binding::parse("Alt P"));
+        assert_eq!(custom.active(|k| [Key::Alt, Key::Char('P')].contains(&k)), ["Portal"]);
+    }
 
     #[test]
     fn larger_bindings_win() {

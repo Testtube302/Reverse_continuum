@@ -18,8 +18,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         arena: None,
         map_dir: std::env::temp_dir().join("aicontinuum-continuum-test-maps"),
     };
-    // Explicitly unspecified billing identity for the controlled test server.
-    let mut session = Session::connect_continuum(
+    let identity = aicontinuum::net::native_identity::prepare(|nonce| expander.expand_identity(nonce))?;
+    let mut session = Session::connect_continuum_identified(
         config,
         move |seed| match expander.expand(seed) {
             Ok(table) => Some(table),
@@ -28,7 +28,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 None
             }
         },
-        [0; 64],
+        identity,
     )?;
     let hold: u64 = args.get(3).map(|s| s.parse()).transpose()?.unwrap_or(0);
     let mut ready_at = None;

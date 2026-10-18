@@ -61,6 +61,9 @@ pub struct Hud {
     spectate: Texture2D,
     /// F2 stat box view (0 names, 1 points, 2 point sort, 3 team sort, 4 W/L, 5 teams), or none.
     pub statbox: Option<u8>,
+    pub show_names: bool,
+    pub show_radar: bool,
+    pub show_messages: bool,
     /// The "ticked" player in the stat box (Page Up/Down), target of F7 attach. None = us.
     pub selected: Option<u16>,
     gradient: Texture2D,
@@ -100,7 +103,10 @@ impl Hud {
             disp: load_texture(assets, "disp"),
             led: load_texture(assets, "led"),
             spectate: load_texture(assets, "spectate"),
-            statbox: None,
+            statbox: Some(0),
+            show_names: true,
+            show_radar: true,
+            show_messages: true,
             selected: None,
             gradient: load_texture(assets, "gradient"),
             icons: load_texture(assets, "Icons"),
@@ -174,7 +180,9 @@ impl Hud {
             let (x, y) = ((sw / 2.0).floor(), (sh / 2.0).floor() - 48.0);
             self.text(&format!("Safety Time Left: {h}:{m:02}:{sec:02}"), TextColor::Yellow, x, y);
         }
-        self.radar(game, sw, sh);
+        if self.show_radar {
+            self.radar(game, sw, sh);
+        }
         self.chat(game, sw, sh);
         // Centre message area: arena enter/leave lines (blue) and kills (yellow) at (sw/6, sh*0.6), newest at the bottom.
         let (cx, cy) = ((sw / 6.0).floor(), (sh * 0.6).floor());
@@ -461,7 +469,7 @@ impl Hud {
             self.text(&format!("{shown_input}_"), TextColor::White, 0.0, y);
         }
         let start = lines.len().saturating_sub(shown);
-        for (text, color) in lines[start..].iter().rev() {
+        for (text, color) in lines[start..].iter().rev().filter(|_| self.show_messages) {
             y -= FONT_H;
             let clipped: String = text.chars().take(max_chars).collect();
             self.text(&clipped, *color, 0.0, y);
@@ -474,6 +482,9 @@ impl Hud {
     /// carrier's colour hasn't been seen yet and stays yellow).
     #[allow(clippy::too_many_arguments)]
     pub fn name_label(&self, name: &str, bounty: u16, flags: u16, ball: bool, ping_ms: u32, team: bool, energy: Option<(u16, u32)>, center: (f32, f32)) {
+        if !self.show_names {
+            return;
+        }
         // Enemy flag or ball carriers are dark red; a ball carrier gets " (Ball)" (reference client).
         let color = match (team, flags > 0 || ball) {
             (true, _) => TextColor::Yellow,
@@ -792,6 +803,40 @@ pub fn draw_statbox(hud: &Hud, game: &Game, view: u8) {
         hud.swatch(row, l, t + cut, 1.0, b - t + 1.0 - 2.0 * cut);
         hud.swatch(row, r, t + cut, 1.0, b - t + 1.0 - 2.0 * cut);
     }
+}
+
+/// Scrollable server arena-list response. Does not switch arenas automatically.
+pub fn draw_arena_list(hud: &Hud, game: &Game, offset: &mut usize, timed_out: bool) {
+    let Some(session) = &game.session else { return };
+    let arenas = session.arena_list.as_deref();
+    let count = arenas.map_or(0, |a| a.len());
+    let capacity = ((screen_height() - 100.0) / FONT_H).max(1.0) as usize;
+    *offset = (*offset).min(count.saturating_sub(capacity));
+    let rows = count.min(capacity).max(1);
+    let w = 368.0;
+    let h = (rows as f32 + 4.0) * FONT_H;
+    let x = ((screen_width() - w) / 2.0).max(0.0);
+    let y = 30.0;
+    hud.swatch(ColorRow::Border1, x, y, w, h);
+    hud.swatch(ColorRow::Background, x + 2.0, y + 2.0, w - 4.0, h - 4.0);
+    hud.text("Arena list               Players", TextColor::Green, x + 8.0, y + 4.0);
+    match arenas {
+        None => {
+            let message = if timed_out { "No reply. Esc, then Esc A to retry." } else { "Requesting arenas from server..." };
+            hud.text(message, TextColor::White, x + 8.0, y + 20.0);
+        }
+        Some([]) => { hud.text("No arenas reported.", TextColor::White, x + 8.0, y + 20.0); }
+        Some(arenas) => {
+            for (i, arena) in arenas.iter().skip(*offset).take(capacity).enumerate() {
+                let name: String = arena.name.chars().take(28).collect();
+                let marker = if arena.current { '*' } else { ' ' };
+                let color = if arena.current { TextColor::Yellow } else { TextColor::White };
+                hud.text(&format!("{marker}{name:<28} {:>5}", arena.players), color,
+                    x + 8.0, y + 20.0 + i as f32 * FONT_H);
+            }
+        }
+    }
+    hud.text("* current   Up/Down: scroll   Esc: close", TextColor::Green, x + 8.0, y + h - 18.0);
 }
 
 /// Draws help page `page` in a bevelled box at the top left, sized to its text.

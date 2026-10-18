@@ -1,10 +1,10 @@
 //! SubSpace `.lvl` map loader.
 //!
-//! Layout: an optional 8-bit BMP tileset (whose BITMAPFILEHEADER size field marks where tile
+//! Layout: an optional BMP tileset (whose BITMAPFILEHEADER size field marks where tile
 //! data begins), followed by 4-byte little-endian tile records: x in bits 0-11, y in bits
 //! 12-23, tile id in bits 24-31. The map is a 1024x1024 grid of 16x16 pixel tiles.
 
-use crate::bmp::{self, IndexedImage};
+use crate::bmp::{self, RgbImage};
 
 pub const MAP_SIZE: usize = 1024;
 pub const TILE_PIXELS: u32 = 16;
@@ -53,7 +53,7 @@ pub struct Map {
     pub records: Vec<TileRecord>,
     pub doors: Vec<TileRecord>,
     /// Tileset embedded in the map, if any (otherwise `graphics/tiles.bm2` is used).
-    pub tileset: Option<IndexedImage>,
+    pub tileset: Option<RgbImage>,
 }
 
 impl Map {
@@ -69,7 +69,7 @@ impl Map {
             if pos > data.len() {
                 return Err(format!("tileset size {pos} exceeds file length {}", data.len()));
             }
-            map.tileset = Some(bmp::decode(&data[..pos]).map_err(|e| e.to_string())?);
+            map.tileset = Some(bmp::decode_rgb(&data[..pos]).map_err(|e| e.to_string())?);
         }
 
         for chunk in data[pos..].chunks_exact(4) {

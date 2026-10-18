@@ -103,6 +103,16 @@ pub enum WarpKind {
     NotEnoughEnergy,
 }
 
+/// Effective engine mode from the last physics tick, after energy/shutdown checks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EngineState {
+    Idle,
+    Thrust,
+    Afterburner,
+    Rocket,
+    Disabled,
+}
+
 #[derive(Clone, Debug)]
 pub struct Ship {
     pub ship: u8,
@@ -111,6 +121,7 @@ pub struct Ship {
     pub orientation: f32,
     pub energy: f32,
     pub thrusting: bool,
+    pub engine_state: EngineState,
     /// Gun and bomb levels, 1-based (0 = none).
     pub guns: u32,
     pub bombs: u32,
@@ -181,6 +192,7 @@ impl Ship {
             orientation: 0.0,
             energy: s.initial_energy as f32,
             thrusting: false,
+            engine_state: EngineState::Idle,
             guns: s.initial_guns,
             bombs: s.initial_bombs,
             multifire: false,
@@ -452,6 +464,17 @@ impl Ship {
             self.velocity.y -= h.y * thrust;
         }
         self.thrusting = thrusting || rocket;
+        self.engine_state = if rocket {
+            EngineState::Rocket
+        } else if shutdown {
+            EngineState::Disabled
+        } else if !thrusting || thrust == 0.0 {
+            EngineState::Idle
+        } else if afterburner {
+            EngineState::Afterburner
+        } else {
+            EngineState::Thrust
+        };
         if let Some((_, ticks)) = self.portal.as_mut() {
             *ticks = ticks.saturating_sub(1);
             if *ticks == 0 {
@@ -633,6 +656,36 @@ mod tests {
         }
         assert!(s.energy < 1000.0);
         assert!(s.velocity.length() > 2010.0 / 160.0 * 0.5);
+    }
+
+    #[test]
+    fn engine_mode_tracks_effective_thrust_and_afterburner() {
+        let settings = ArenaSettings::default();
+        let map = Map::empty();
+        let mut ship = Ship::new(0, Vec2::new(512.5, 512.5), &settings);
+        for input in [Input { forward: true, ..Default::default() }, Input { backward: true, ..Default::default() }] {
+            ship.tick(&map, &settings, input);
+            assert_eq!(ship.engine_state, EngineState::Thrust);
+            let boost = Input { afterburner: true, ..input };
+            ship.tick(&map, &settings, boost);
+            assert_eq!(ship.engine_state, EngineState::Afterburner);
+            ship.energy = 0.0;
+            ship.tick(&map, &settings, boost);
+            assert_eq!(ship.engine_state, EngineState::Thrust);
+            ship.energy = ship.max_energy as f32;
+            ship.tick(&map, &settings, Input { afterburner: true, ..Default::default() });
+            assert_eq!(ship.engine_state, EngineState::Idle, "Shift alone does not engage thrust");
+            ship.shutdown_ticks = 1;
+            ship.tick(&map, &settings, boost);
+            assert_eq!(ship.engine_state, EngineState::Disabled);
+            ship.tick(&map, &settings, boost);
+            assert_eq!(ship.engine_state, EngineState::Afterburner);
+            ship.rocket_ticks = 1;
+            ship.tick(&map, &settings, boost);
+            assert_eq!(ship.engine_state, EngineState::Rocket);
+            ship.tick(&map, &settings, Input::default());
+            assert_eq!(ship.engine_state, EngineState::Idle);
+        }
     }
 
     #[test]

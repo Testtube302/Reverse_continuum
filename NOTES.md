@@ -414,3 +414,394 @@
 - Added an in-repository Claude/reviewer handoff with checkout instructions,
   available vs external artifacts, reproducible local commands, and concrete
   production blockers. Updated stale research status and root README provenance.
+
+- Acknowledgement compatibility correction after owner-reported Trench Wars timeout:
+  Continuum 00 02 no longer requires a VIE zero-key field; supports short ack and
+  optional body like public nullspace Connection.cpp. Added receive-only legacy CRC
+  compatibility from nullspace Crypt.cpp, with independent C++ fixtures and bounded
+  handshake diagnostics. No Trench Wars packet capture or public test performed;
+  the cause of the reported failure remains unconfirmed pending user retry.
+
+- Owner's subsequent Trench Wars retry produced a valid decrypted 139-byte 00 02
+  acknowledgement, followed by a decoded disconnect. This establishes receive-side
+  encryption interoperability for that attempt; login/server admission is not verified.
+  Extended bounded packet metadata diagnostics past the handshake, logged login
+  submission/result codes and session key challenge progress, and labeled disconnects
+  during login. No credentials, identity bytes, keys or packet bodies are logged.
+  No public-server test was initiated; the server's reason remains unknown.
+
+- Owner retry at 14:40:50 explicitly received login response 0 (OK) from Trench
+  Wars, followed by reliable/clustered arena traffic and a core disconnect. Login
+  is accepted; sustained arena entry is not yet verified. Added disconnect state
+  summary (map/settings/join/security readiness), game packet type counts without
+  payloads, and arena lifecycle diagnostics. Local loopback login/arena entry and
+  the regression suite pass. Public disconnect cause remains undetermined.
+
+- Owner retry at 14:43:40 reached InArena with joined=true/settings=true/map=false,
+  no pending security key and zero security replies. Map download was requested but
+  no complete 0x2a file reached Session. Corrected Continuum requests to 0x0c plus
+  LE16 file index zero, matching public nullspace FileRequester::SendNextRequest;
+  VIE keeps its one-byte request. SS.NET accepts either, so earlier local tests
+  did not expose this difference. Added synthetic encrypted-session regression and
+  transfer/reliable queue sizes on disconnect. This difference is confirmed, but
+  its causal role in Trench Wars' disconnect is not yet established.
+
+- Owner retry at 14:47:30 still disconnected after exactly 4,800 huge-chunk bytes;
+  next reliable ID 41, no buffered out-of-order packets, no unacked outgoing
+  requests. Indexed request did not resolve it. New loopback regression transfers
+  14,400 bytes in three ten-packet windows, reorders chunks, verifies every encrypted
+  acknowledgement and final byte-for-byte reassembly; passes with the full suite.
+  This does not prove legacy server interoperability. Preserve the last eight server
+  arena/warning/error notices at failure (escaped text); omit player/private chat.
+  Three chat packets were seen on the failing run, but their content was not retained.
+
+- Found an additional concrete compatibility bug: 00 12 expansion challenges were
+  silently ignored unless exactly six bytes long. Public nullspace Connection.cpp
+  ContinuumKeyExpansionRequest reads the four-byte seed without that restriction.
+  An encrypted eight-byte challenge reproduced the missing reply in a failing
+  pre-fix regression. Accept the six-byte prefix with trailing bytes; continue to
+  reject truncated seeds. Tests cover direct and clustered padded challenges,
+  unchanged response table/session cipher, and a 14,400-byte download that pauses
+  after 4,800 bytes until a padded challenge is answered. Full suite passes and
+  local encrypted login remains connected for 30 seconds. Existing Trench Wars
+  metadata did not retain inner core packet lengths, so this remains an unverified
+  explanation of its disconnect, not a confirmed public-server fix. No public
+  login was initiated. The isolated reference containers were inspected read-only;
+  no new original-client packet capture was performed in this follow-up.
+
+- Added opt-in AICONTINUUM_TRACE=1 transport metadata tracing for the unresolved
+  Trench Wars disconnect. Includes monotonic elapsed milliseconds, receive/send
+  sizes and socket results, decoded core/game types, nested reliable/cluster types,
+  reliable IDs, huge-transfer totals/progress, and rejected cipher packets after
+  the previous 32-packet logging limit. Never formats payloads, seeds, or keys.
+  Trace is capped at 8,192 events per connection, with an explicit cap marker;
+  nested metadata formatting is bounded to eight levels. Unit tests check credential
+  and seed exclusion. Added delayed/lost-chunk recovery and duplicate retransmission
+  coverage; 84 unit tests and 12 synthetic UDP tests pass (one unit test ignored).
+  Real-server integration tests remain opt-in. Desktop launcher enables the trace;
+  no public-server login initiated and no new disconnect fix claimed.
+
+- Owner explicitly authorized an original-client public Trench Wars comparison and
+  use of the saved account in the isolated Wine VM, then explicitly approved account
+  creation after the official client reported Unknown name. A temporary UDP relay
+  restricted to game/ping ports 5400/5401 used the Mac's public route, preserving the
+  containers' network=none isolation. Entered the saved password through the masked
+  UI; no credentials logged or committed. Creation succeeded and a second login no
+  longer asked to create the account. The original client downloaded to 64%, then
+  showed WARNING: Disconnected from server. It did NOT complete arena loading.
+  The earlier relay deadline interrupted a preliminary attempt; the second relay
+  was still active when the original client displayed the disconnect. This is not
+  a clean native-Windows control (Wine and SSH/UDP relay add variables), so it does
+  not prove an account restriction or explain AIContinuum's sub-second disconnect.
+  Closed the original client, stopped the relay, restored prior profile/zone files,
+  and removed the temporary plaintext password file. Account creation persists.
+
+- Questionnaire investigation (2026-10-16): owner reports successful original
+  Continuum login on native Windows after submitting a mandatory new-user form,
+  using a DIFFERENT account. This verifies that route/client, but does not clear
+  any registration requirement for the AIContinuum account. Public nullspace
+  Connection.cpp PasswordResponse (7ebdbc53a052fa62ff246b5f6a8b3347c395e5a4)
+  reads byte 19 independently of the login code; SS.NET S2C_LoginResponse.DemoData
+  and AuthCode.AskDemographics (750f16298253d51e7ce4b2b55078acc8a3122ff9)
+  confirm the flag and success code 0x10. AIContinuum ignored the flag and mislabeled
+  0x10 as demo version. Now log flag presence/request state and stop with explicit
+  same-account original-client completion instructions when requested. No form
+  answers are generated or transmitted; an in-client submission UI remains missing.
+  Preserve this failure against subsequent packets in the same update. Synthetic
+  encrypted tests cover OK+flag, nonzero flag values, billing-down/spec-only+flag,
+  code 0x10, bad password precedence, short replies and normal arena entry.
+  Full suite: 84 unit + 13 synthetic UDP tests pass; one ignored, external asset/
+  server tests skip without configuration. Clippy succeeds with existing warnings.
+  Earlier public traces did not retain byte 19, so questionnaire causality is still
+  unconfirmed. No public-server test performed for this change.
+
+- Owner retry 2026-10-16 11:16:20 on c521a9a: login 0/OK, questionnaire flag
+  explicitly NOT requested, joined/settings received, map 6,720/97,357 bytes,
+  encrypted core 07 disconnect at +733 ms. No unacked outgoing requests or buffered
+  incoming reliable packets. This attempt rules out the questionnaire request as
+  the immediate blocker; the server still supplies no reason in its disconnect.
+- Original 0.40 local reference comparison after Tailscale reauthentication:
+  captured only localhost UDP 5000 in the isolated VM, with the dummy local profile.
+  Two captures include cached-map entry and a fresh download (temporarily moved
+  and then restored its cached local map). Rust cipher decoded 76 and 188 encrypted
+  datagrams respectively without rejecting any; re-encrypting every decoded client
+  datagram reproduced the captured wire bytes exactly. No original/client payloads,
+  keys or packet captures are committed. Original client stopped after testing.
+- Confirmed arena-entry layout discrepancy: original C2S 01 is 27 bytes, including
+  optional-graphics flag at byte 26. AIContinuum used the 26-byte VIE layout for both
+  protocols. Public nullspace SendArenaLogin and SS.NET C2S_GoArenaContinuum corroborate
+  the capture. Added the byte only for Continuum, set to 0 because optional LVZ
+  downloads are not implemented. VIE remains 26 bytes. A regression failed on the
+  old implementation and now passes; added a VIE wire-layout regression. SS.NET
+  accepts both layouts, explaining why prior local tests missed the discrepancy,
+  but Trench Wars causality still requires verification.
+  Full suite: 84 unit + 14 synthetic UDP pass, one ignored; external tests skip by
+  default. Clippy succeeds with existing warnings; release build succeeds. Actual
+  localhost Continuum login/map/settings and 10-second hold with one security reply
+  pass after the fix.
+
+- One explicitly approved public AIContinuum test on 130f459 still disconnected
+  at +718 ms after 9,120/97,357 map bytes. Login OK, questionnaire not requested,
+  and the trace confirms a 27-byte arena request. The arena-length correction is
+  not sufficient to resolve Trench Wars. No further AIContinuum public test is
+  authorized by that single-test approval.
+- Repeated the previously authorized original-client comparison using direct UDP
+  from the reference host through a destination-restricted bridge, removing SSH
+  from the game transport. Original 0.40 on Wine 5.5 successfully loaded Trench
+  Wars with the currently selected saved account. Its 139-byte encryption ack,
+  login 0 and no-questionnaire flag match AIContinuum. Captured 2,313 encrypted
+  packets decoded without rejection; every outgoing original packet re-encrypts
+  byte-for-byte. The original sends individual immediate reliable acknowledgements;
+  AIContinuum batches them. This remains a hypothesis for the disconnect.
+  Approval review rejected a temporary plaintext password file; instead entered
+  credentials over SSH stdin directly into the masked UI, with Save unchecked.
+  No password file was created. Client stopped, original profile/zone files restored,
+  bounded bridge exited, remote capture/script removed. Private capture remains
+  local outside Git. Separate isolated legacy-server trials did not open their port
+  under either existing Wine runtime; their processes were stopped.
+- Independent expansion-reply correction: original 0.40 sends core 0x13 as
+  `[00 13][version u16=0][seed u32][20 u32 words]` (88 bytes), corroborated by
+  https://www.twcore.org/SubspaceProtocol/ . The public nullspace implementation
+  omitted the version, and our original port inherited its 86-byte layout. Verified
+  all 20 captured reference words against the existing expansion helper without
+  retaining keys in logs. Updated direct/padded/clustered challenge tests; pre-fix
+  regression failed, corrected 88-byte reply passes. This is NOT the immediate
+  disconnect cause: the failing public trace contains no 0x12 challenge.
+
+- A second separately approved public AIContinuum experiment sent each reliable ACK
+  immediately instead of batching. Local map/settings entry and a 30-second hold
+  passed first. Trench Wars still sent core 07 at +1,095 ms after 2,400/97,357 map
+  bytes, login OK, no questionnaire, no missing outgoing ACKs or pending security
+  challenge. Immediate ACKs alone do not resolve this failure; the experimental
+  transport stays outside the repository and desktop build. Both one-test public
+  approvals have now been consumed.
+- Found another measured login discrepancy: offset 89 was zero despite being the
+  destination IPv4 field. Original direct-reference capture reports 127.0.0.1 as
+  numeric 0x7f000001 in little-endian order, matching the bridge destination.
+  SS.NET LoginPacket.ServerIPv4Address documents the field; Network.GetProxyUsage
+  classifies a zero address or bound port as SOCKS5, so it is not universally unused.
+  Now report the configured destination IPv4 and actual bound port; explicitly
+  encode the u16 port, zero redirect login ID and reserved u16. IPv6 has no legacy
+  IPv4 representation and retains zero. A loopback wire regression reproduced the
+  zero-address mismatch before the fix. No borrowed identity or integrity value
+  was substituted. Whether Trench Wars acts on this field is not established.
+  Validation after both layout corrections: 84 unit and 14 synthetic UDP tests
+  pass (one unit ignored); opt-in asset/live-server tests skip by default. Clippy
+  and release build pass with existing warnings. Actual local Continuum login,
+  map/settings entry and a 30-second hold pass (zero security replies in this run).
+
+- Third separately approved public test (b80e9f4): corrected destination IPv4
+  progressed past the former sub-second server disconnect. Received the complete
+  97,357-byte map transfer at +4,873 ms and verified its CRC. Client then failed
+  locally with `bmp: unsupported bit depth 24` and sent its own disconnect. This
+  is evidence that the address correction removes the observed immediate blocker
+  for this attempt; it is not yet successful arena readiness. Approval consumed.
+- Downloaded map's embedded bitmap is 304x160, 24-bit BI_RGB, DIB size 40 and
+  pixel offset 54. Added lossless RGB decoding for embedded LVL tilesets while
+  preserving the existing indexed BM2 API. Handles BGR channels, DWORD row stride,
+  positive/negative height, and validates header/source bounds before allocation.
+  Microsoft BMP storage/header documentation corroborates the format:
+  https://learn.microsoft.com/en-us/windows/win32/gdi/bitmap-storage
+  https://learn.microsoft.com/en-us/windows/win32/api/wingdi/ns-wingdi-bitmapinfoheader
+  Five synthetic regressions cover orientation/padding/transparency, >256 colors,
+  truncated/invalid inputs, unchanged indexed decoding, and LVL tile boundaries.
+  Actual downloaded map parses 33,692 records/630 doors; every RGBA byte (194,560)
+  matches independent Pillow 12.3.0 decoding. No map/image assets committed.
+  Full tests: 89 unit +14 synthetic UDP pass, one ignored; clippy/release pass.
+
+- Fourth separately approved public test, f4edf72 (up to 90 seconds): arena ready
+  at +354 ms using the previously verified cached map; map/settings/player entry
+  loaded and normal spectator positions/time sync continued. At +15,298 ms the
+  server sent an explicit SSC network ban notice (BanId #1, expiry 2014-02-16
+  12:17 GMT+0), followed by core 07 at +15,549 ms. Test stopped immediately.
+  The historical expiry is inconsistent with the current date; this does not
+  establish a current ban on the user's account or identify which account/IP/
+  client-identity check caused it. Original-client control used a different host
+  route. No expansion challenge or security response occurred before closure.
+  This establishes encrypted login and arena entry, NOT a 90-second session or
+  production acceptance. Approval consumed; no more public tests performed.
+- Surface the received SSC ban notice in the connection-failed UI, retaining the
+  server's wording instead of asserting a cause. Only arena/server chat type 0 is
+  eligible; player/public/private messages are excluded. Encrypted synthetic test
+  covers the notice and disconnect arriving in one cluster and chat-type exclusion.
+  Full suite passes: 89 unit +15 synthetic UDP, one ignored; clippy/release pass.
+  Further public-server work requires clarification of the server-reported
+  restriction; do not rotate/borrow identities or change routes to evade it.
+
+- Owner follow-up: reports original Continuum accepts the same account from the
+  same internet connection as AIContinuum. Treat an account/IP ban as less likely;
+  operator feedback is not required to continue local compatibility investigation.
+  Re-analyzed existing captures only: original remains active through 83.462 s,
+  no extra expansion challenge/security reply. Original billing field is populated;
+  ours is zero. Across two local original sessions, account/machine field unchanged
+  while all 64 billing bytes differ. Local/public comparison changes account but
+  retains machine field; all 64 billing bytes differ. No values logged or copied
+  into AIContinuum. Our account-name-derived machine field is also not equivalent
+  to the reference's account-independent machine identity. Generation remains
+  unimplemented; causal link to SSC rejection is unproved. Next local investigation
+  should establish billing-field construction/inputs, not replay captured values.
+  SS.NET BillingUdp.cs forwards both fields; public TCP billing documentation
+  distinguishes macid/contid (https://wiki.minegoboom.com/index.php/TCP_Billing_Protocol).
+  No public test, reference-client execution, or desktop binary change this follow-up.
+
+- Recovered the 64-byte login billing-field framing locally: clear nonce u32,
+  encrypted checksum u32 and fourteen encrypted information u32s. Checksum is
+  the uncomplemented CRC32 of all 64 plaintext bytes with checksum zero, XOR
+  nonce. Identity table uses reference 0x457d60 only; the session expansion's
+  0x458be0 stage is omitted. Raw transform encrypts bytes 4..63 without packet
+  CRC8/escaping. Added a Rust codec and explicit reference-helper --identity mode.
+- New Rust decoding and byte-exact re-encoding pass all three existing original
+  captures, with independent Python plaintext comparison in memory. All fourteen
+  plaintext words are stable across those captures. No actual values retained in
+  source/logs or substituted into the client. Original CRC/encrypt/decrypt routines
+  generated 24 synthetic fixtures; Rust matches every output and rejects one-bit
+  corruption at every byte position, wrong lengths and an incorrect key table.
+  Existing 32 session expansion fixtures and 24 identity-table fixtures pass.
+- Traced field source categories: legacy BIOS/device checksums, filtered registry
+  values (lowercase-name CRC identifies RegisteredOwner, RegisteredOrganization,
+  ProductId and Identifier), RAS connection data, two OS string CRCs, and a selected
+  Windows-directory entry creation timestamp. Registry ancestor filters, some
+  selectors and OS API-name confirmation remain unresolved. Separate login machine
+  word comes from volume serial lookup, not the current account-name CRC.
+  Detailed measured mappings and uncertainty: docs/research/continuum/IDENTITY.md.
+- Full validation: 91 unit +15 synthetic UDP tests pass, one unit ignored;
+  default asset/live-server tests remain opt-in. Clippy and release build pass
+  with existing warnings, none in the changed codec/helper modules. No new public
+  test or running reference client; analysis/emulation used existing local inputs.
+  Native macOS collection/mapping is still missing. Codec is not enabled in the
+  launcher and does not yet change the login packet or establish an SSC fix.
+
+- Native macOS identity integration: confirmed original OS calls as GetUserNameA
+  and GetComputerNameA by matching saved import pointers to Wine 5.5 ELF exports;
+  advapi32 relocation also agrees with RegEnumKeyA. New native_identity collector
+  hashes the actual OS user/hostname, uses the Data volume UUID's CRC32 (signed
+  absolute value, fallback 1) as the separate machine word, and sends the current
+  timezone bias. Unsupported Windows-only words stay zero. This is an explicit
+  cross-platform mapping, not Windows registration emulation. Nonce comes from
+  /dev/urandom; no game-account input, saved replacement identifiers, VM identities
+  or plaintext identification logs. Collection/helper failures precede negotiation.
+  Sources and exact mapping: docs/research/continuum/IDENTITY.md.
+- Launcher and controlled login example use connect_continuum_identified; low-level
+  existing caller-supplied API and VIE behavior remain compatible. Helpers need
+  the explicit --identity mode. Non-macOS native collection is explicitly unsupported
+  pending an independently verified implementation; Windows cargo check still passes.
+- Validation: 92 unit +15 synthetic UDP tests pass, one unit ignored; new packet
+  checks preserve the supplied machine word, signed timezone and complete encoded
+  billing field only after the encrypted handshake. Four actual local-server tests
+  pass in Continuum/native mode: map/settings entry, periodic security exchange,
+  two-client flight, and firing/damage/kill reporting. Separate local session holds
+  90 seconds with two security replies. Release GUI joins a Warbird on loopback;
+  screenshot shows the live ship, map and HUD. Clippy/release pass with existing
+  warnings. No new public test yet; native mapping is not proven accepted by SSC.
+
+- Owner then authorized one 90-second test of 46bc05e at Trench Wars
+  207.148.16.165:5400 with the selected saved account, brief Warbird movement and
+  return to spectator, without firing. PASS: arena ready +347 ms; Warbird request
+  +20,348 ms, server confirmation +20,394 ms; movement observed; spectator return
+  confirmed. Connected through 90 seconds and disconnected normally. No earlier
+  SSC rejection appeared. This validates the combined native-identification build
+  for this bounded test; it does not identify the server's exact rejection rule
+  or prove all-zone compatibility. Approval consumed; no additional public test.
+  Private metadata log stays outside Git; no account/identity values published.
+- Desktop updated to 46bc05e with saved settings unchanged and rollback at
+  .continuum/before-native-identity-20261016-124737. Review branch pushed; main
+  untouched. Local GUI ship entry and local combat passed, while the public test
+  deliberately did not fire. Remaining production limitations include private
+  reference-image expansion and an unimplemented Windows native collector.
+
+- Outgoing public chat (2026-10-16): reproduced with two dummy clients on local
+  SS.NET using Continuum/native identification. Recipient received exactly one
+  message; sender displayed zero because send_public_chat never appended to chat.
+  Open-source nullspace ChatController::SendInput likewise displays its own sent
+  message after reliable transmission (src/null/ChatController.cpp,
+  https://github.com/plushmonkey/nullspace). Added local sender display using our
+  player ID and the actual bounded/NUL-terminated wire text; macros share this
+  path. Empty/pre-arena calls do not create local entries.
+- Regression failed before the fix and passes after it: recipient and sender each
+  show exactly one copy, including a wait for possible duplicate server echo.
+  Synthetic loopback test checks public packet layout, sender ID, empty/pre-arena
+  behavior and 240-byte/NUL display boundaries. Full offline suite passes (92 unit,
+  15 transport, 1 chat; one ignored unit; unconfigured live/assets checks skip).
+  Actual two-client local Continuum chat test passes. Clippy and release build
+  pass with existing warnings. No public-server message or additional public test.
+
+- Gameplay audio (2026-10-16): Cargo omitted macroquad's opt-in `audio` feature;
+  macroquad 0.4.16 defaults to an empty feature set and substitutes dummy audio.
+  Desktop diagnostics contained 98 disabled-audio warnings. Enabled the feature
+  and locked its quad-snd/decoder dependencies; missing/failed sound loads now log
+  once per clip instead of silently caching None. Source: pinned macroquad
+  Cargo.toml and src/audio.rs; quad-snd 0.2.8 src/coreaudio_snd.rs and src/mixer.rs.
+  The earlier M3 "75 decode" check used the dummy loader and did not prove decoding.
+- Validation with the real macOS CoreAudio backend: sound_check decodes all 75
+  installed .wa2 files, zero failures. Release offline GUI ran eight seconds with
+  scripted gun/bomb fire, no disabled-audio/load/panic diagnostics. Physical speaker
+  audibility still needs the owner's retest. Full tests pass (92 unit, 15 transport,
+  1 chat; one ignored unit; live/assets checks unconfigured), clippy passes with
+  existing warnings, release and Windows cross-target check pass. No public server
+  connections. Existing --mute and screenshot silence remain intentional.
+
+- Engine audio (2026-10-16): the enabled backend only played discrete SoundCue
+  events; no engine loop or F8 handler existed. Added a per-tick effective engine
+  mode and one persistent local engine loop, changed only on mode transitions.
+  Current asset mapping: idle hum, normal forward/reverse rev, afterburner thrust,
+  rocket rocket2. These playback choices restore the missing functionality but
+  have not been measured against original Continuum's exact mix/pitch/timing.
+  Shift alone leaves the existing physics idle; Shift plus forward/reverse uses
+  afterburners when energy permits. Shutdown disables the loop; death, spectating,
+  disconnection and return to the launcher stop playback. F8 toggles engine audio
+  (including through the Esc menu); Shift+F8 remains the macro binding. --mute and
+  screenshot mode silence engines too. No saved key/profile changes.
+- Tests: new simulation regression covers forward/reverse, boost, energy depletion,
+  Shift alone, shutdown/recovery, rocket expiry and release. Frontend regression
+  checks clip changes, death, spectator and ship re-entry. A temporary native
+  CoreAudio harness exercised the actual Sounds controller through idle, forward,
+  boost, reverse, release, off/on, mute and spectator transitions successfully.
+  No server connection; physical speaker confirmation remains a user retest.
+  Full suite passes (93 library, 1 frontend, 15 transport, 1 chat; one ignored
+  unit; asset/live checks unconfigured). Clippy has only the prior warnings;
+  release build and Windows cross-target check pass.
+
+- Player identity and menu controls (2026-10-17): local dummy-account screenshot
+  verified that Cycle already rendered our player-list row, but the default list
+  was hidden and the local ship renderer omitted its name. Names view now starts
+  visible; the owner's requested own-ship label uses the server name (account name
+  fallback), bounty and ping. Low-energy and ball-countdown labels move below it.
+  This is a requested display change, not a claim of original-client pixel parity.
+- macOS gets runtime Option+P as an alternative Cycle binding, preserving F2 and
+  respecting any existing custom Option+P action. Alternate actions are deduplicated
+  and the larger chord suppresses the Alt map modifier. Cycle remains available
+  during chat entry. Host fnState was 1; the exact cause of the reported physical
+  F2 failure is not established. Actual macOS key delivery still needs owner retest.
+- Esc menu now explicitly handles F1 help, F2 list, F3 name tags, F4 radar and F5
+  messages. Menu-consumed bindings remain blocked until release so F3/F4/F5 cannot
+  inadvertently deploy a rocket/brick/decoy on the next frame. F8 remains engine
+  audio. Help ticker, arena-list UI, banner UI, ignore-macros and list-size controls
+  shown in the legacy menu are still unimplemented; this is not full menu parity.
+- Regression coverage: alternate binding conflicts/deduplication, menu-key release
+  blocking and player-list access during chat. Full tests pass (94 library, 2
+  frontend, 15 transport, 1 chat; one ignored unit; asset/live checks unconfigured).
+  Local Continuum GUI screenshots confirm names on ship/list at entry and Cycle
+  moving to Points. Clippy retains prior warnings; release and Windows check pass.
+  No public tests. Owner also requested the pending personal desktop remap: Space
+  guns, Shift+Space repel, Tab bombs. It is a local keyboard.dat change with backup;
+  repository default bindings remain the original layout.
+
+- Arena list (2026-10-17): wired Esc A to reliable public-command packet `?arena`
+  without a local chat echo. Added S2C 0x2F decoding: repeated NUL-terminated names
+  and little-endian signed 16-bit populations; negative marks the current arena.
+  Source: SubspaceServer src/Core/Modules/PlayerCommand.cs Command_arena and
+  TryAppendToPacket (https://github.com/gigamon-dev/SubspaceServer). Malformed or
+  truncated entries are rejected as a whole, including missing count bytes.
+- Added a scrollable arena-name/player-count panel, current-arena marker, pending
+  and timeout messages, Up/Down or wheel scrolling, and Esc dismissal. Panel input
+  is consumed until release to avoid moving/firing while browsing. This implements
+  list retrieval/display, not arena switching or original-client pixel parity.
+- Two parser tests cover multiple entries, zero/current counts, the signed minimum,
+  empty replies and malformed tails. Actual local Continuum/native login test
+  receives the current arena with nonzero population and no command chat echo.
+  Release GUI screenshot shows 13 server arenas with current arena 0 highlighted.
+  Full sequential suite passes: 96 library, 2 frontend, 15 transport, 1 chat;
+  one ignored unit; unconfigured live/assets checks skip. The first parallel run
+  hit the existing questionnaire UDP-response timing assertion; sequential rerun
+  passes. Clippy retains prior warnings, release and Windows checks pass. No public
+  zone test or server configuration changes.

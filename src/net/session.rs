@@ -54,7 +54,7 @@ pub const LOGIN_RESPONSES: [&str; 19] = [
     "billing server down (OK)",
     "server busy",
     "restricted",
-    "demo version",
+    "new-user questionnaire requested",
     "too many demo users",
     "demo versions not allowed",
 ];
@@ -173,6 +173,8 @@ pub struct Chat {
 pub struct Session {
     pub transport: Transport,
     continuum_id: Option<[u8; 64]>,
+    login_machine_id: Option<u32>,
+    login_timezone_bias: i16,
     pub config: Config,
     pub phase: Phase,
     pub pid: Option<u16>,
@@ -181,6 +183,7 @@ pub struct Session {
     pub map: Option<Arc<Map>>,
     pub map_name: Option<String>,
     pub chat: Vec<Chat>,
+    pub arena_list: Option<Vec<super::arena_list::ArenaInfo>>,
     /// Shots and deaths received since the game last drained them.
     pub remote_fires: Vec<RemoteFire>,
     pub deaths: Vec<Death>,
@@ -209,6 +212,7 @@ pub struct Session {
     pub spectate_at: Vec2,
     pending_security_key: Option<u32>,
     pub security_replies: u32,
+    received_packet_types: [u32; 256],
     expected_map_checksum: u32,
     last_position_sent: u32,
     last_position_timestamp: u32,
@@ -232,10 +236,24 @@ impl Session {
         Ok(Self::with_transport(config, transport, Some(identity)))
     }
 
+    /// Connect with freshly encoded local identification and native timezone.
+    pub fn connect_continuum_identified(
+        config: Config,
+        expand: impl FnMut(u32) -> Option<[u32; 20]> + Send + 'static,
+        identity: super::continuum_identity::LoginIdentity,
+    ) -> io::Result<Self> {
+        let mut session = Self::connect_continuum(config, expand, identity.billing)?;
+        session.login_machine_id = Some(identity.machine_id);
+        session.login_timezone_bias = identity.timezone_bias;
+        Ok(session)
+    }
+
     fn with_transport(config: Config, transport: Transport, continuum_id: Option<[u8; 64]>) -> Self {
         Self {
             transport,
             continuum_id,
+            login_machine_id: None,
+            login_timezone_bias: 0,
             config,
             phase: Phase::Connecting,
             pid: None,
@@ -244,6 +262,7 @@ impl Session {
             map: None,
             map_name: None,
             chat: Vec::new(),
+            arena_list: None,
             remote_fires: Vec::new(),
             deaths: Vec::new(),
             prize_events: Vec::new(),
@@ -261,6 +280,7 @@ impl Session {
             spectate_at: Vec2::new(512.0, 512.0),
             pending_security_key: None,
             security_replies: 0,
+            received_packet_types: [0; 256],
             expected_map_checksum: 0,
             last_position_sent: 0,
             last_position_timestamp: 0,
@@ -281,6 +301,19 @@ impl Session {
     }
 
     fn fail(&mut self, why: String) {
+        eprintln!("[Session] {why}");
+        eprintln!("[Session] disconnect state: phase {:?}, joined {}, map loaded {}, settings loaded {}, security pending {}, security replies {}",
+            self.phase, self.joined, self.map.is_some(), self.settings.is_some(),
+            self.pending_security_key.is_some(), self.security_replies);
+        let counts: Vec<_> = self.received_packet_types.iter().enumerate()
+            .filter(|(_, count)| **count != 0)
+            .map(|(kind, count)| format!("{kind:02x}:{count}"))
+            .collect();
+        eprintln!("[Session] received game packet counts: {}", counts.join(", "));
+        // Preserve only recent server notices, not player/private conversations.
+        for chat in self.chat.iter().rev().filter(|c| matches!(c.kind, 0 | 6 | 8)).take(8).collect::<Vec<_>>().into_iter().rev() {
+            eprintln!("[Session] server notice (type {}): {:?}", chat.kind, chat.text);
+        }
         self.note(format!("failed: {why}"));
         self.phase = Phase::Failed(why);
     }
@@ -288,14 +321,31 @@ impl Session {
     /// Processes network traffic. Call every frame.
     pub fn update(&mut self) {
         for ev in self.transport.poll() {
+            // Keep the original failure visible if other packets arrived in the same batch.
+            if matches!(self.phase, Phase::Failed(_)) {
+                break;
+            }
             match ev {
                 Event::Connected => {
+                    eprintln!("[Session] encryption established");
                     self.note("encryption established".into());
                     self.send_login(false);
                     self.phase = Phase::LoggingIn;
                 }
                 Event::Packet(p) => self.handle(&p),
-                Event::Disconnected(why) => self.fail(why),
+                Event::Disconnected(why) => {
+                    let stage = match self.phase {
+                        Phase::LoggingIn => " during login",
+                        _ => "",
+                    };
+                    let mut reason = format!("{why}{stage}");
+                    if let Some(notice) = self.chat.iter().rev().take(8).find(|c|
+                        c.kind == 0 && c.text.starts_with("You are banned from SSC network")
+                    ) {
+                        reason.push_str(&format!("; server reported: {}", notice.text));
+                    }
+                    self.fail(reason);
+                }
             }
         }
         self.update_doors();
@@ -451,23 +501,32 @@ impl Session {
         let mut p = vec![if self.continuum_id.is_some() { 0x24 } else { 0x09 }, new_user as u8];
         p.extend(fixed_str(&self.config.name, 32));
         p.extend(fixed_str(&self.config.password, 32));
-        p.extend_from_slice(&(crc32(self.config.name.as_bytes()) | 1).to_le_bytes()); // machine id
+        let machine_id = self.login_machine_id.unwrap_or_else(|| crc32(self.config.name.as_bytes()) | 1);
+        p.extend_from_slice(&machine_id.to_le_bytes());
         p.push(0x04); // connect type
-        p.extend_from_slice(&0u16.to_le_bytes()); // timezone bias
+        p.extend_from_slice(&self.login_timezone_bias.to_le_bytes());
         p.extend_from_slice(&0u16.to_le_bytes());
         let version = if self.continuum_id.is_some() { 40u16 } else { 0x86 };
         p.extend_from_slice(&version.to_le_bytes());
         p.extend_from_slice(&444u16.to_le_bytes());
         p.extend_from_slice(&0u16.to_le_bytes()); // no optional client features
         p.extend_from_slice(&[0; 8]);
-        p.extend_from_slice(&[0; 4]); // remote ip (unused)
-        let port = self.transport.local_addr().map(|a| a.port()).unwrap_or(0) as u32;
+        // Original 0.40 and SS.NET LoginPacket report the actual destination,
+        // encoded as a little-endian IPv4 numeric value (zero for IPv6).
+        let remote_ip = match self.config.server.ip() {
+            std::net::IpAddr::V4(ip) => u32::from(ip),
+            std::net::IpAddr::V6(_) => 0,
+        };
+        p.extend_from_slice(&remote_ip.to_le_bytes());
+        let port = self.transport.local_addr().map(|a| a.port()).unwrap_or(0);
         p.extend_from_slice(&port.to_le_bytes());
-        p.extend_from_slice(&[0; 4]);
+        p.extend_from_slice(&[0; 4]); // login ID (no zone redirect)
+        p.extend_from_slice(&[0; 2]); // reserved
         debug_assert_eq!(p.len(), 101);
         if let Some(identity) = self.continuum_id {
             p.extend_from_slice(&identity);
         }
+        eprintln!("[Session] sending login: packet type {:02x}, length {}, new user {new_user}", p[0], p.len());
         self.transport.send_reliable(&p);
     }
 
@@ -482,6 +541,11 @@ impl Session {
         p.extend_from_slice(&768u16.to_le_bytes());
         p.extend_from_slice(&number.to_le_bytes());
         p.extend(fixed_str(&name, 16));
+        if self.continuum_id.is_some() {
+            // Continuum 0.40 capture and SS.NET C2S_GoArenaContinuum: byte 26
+            // selects optional LVZ downloads. We currently load only the map.
+            p.push(0);
+        }
         self.transport.send_reliable(&p);
         self.phase = Phase::EnteringArena;
         self.joined = false;
@@ -539,11 +603,25 @@ impl Session {
     }
 
     pub fn send_public_chat(&mut self, text: &str) {
+        let Some(pid) = self.pid.filter(|_| self.ready()) else { return };
+        if text.is_empty() {
+            return;
+        }
         let mut p = vec![0x06, 0x02, 0x00];
         p.extend_from_slice(&0u16.to_le_bytes());
         p.extend(text.bytes().take(240));
         p.push(0);
         self.transport.send_reliable(&p);
+        // Servers forward public chat to other players, not its sender. Display
+        // the same bounded wire text locally (also covers keyboard macros).
+        self.chat.push(Chat { kind: 2, pid, text: cstr(&p[5..]) });
+    }
+
+    pub fn request_arena_list(&mut self) {
+        if !self.ready() { return; }
+        self.arena_list = None;
+        // Server command, not a local chat message. The reply is S2C 0x2F.
+        self.transport.send_reliable(b"\x06\x02\0\0\0?arena\0");
     }
 
     /// Sends our position if due. `ship` is None while spectating. A non-empty `weapon` is
@@ -608,11 +686,29 @@ impl Session {
     }
 
     fn handle(&mut self, p: &[u8]) {
-        match p[0] {
+        let Some(&kind) = p.first() else { return };
+        self.received_packet_types[kind as usize] = self.received_packet_types[kind as usize].saturating_add(1);
+        match kind {
             0x0A => {
                 let code = p.get(1).copied().unwrap_or(0xFF);
                 let text = LOGIN_RESPONSES.get(code as usize).copied().unwrap_or("unknown");
+                eprintln!("[Session] login response {code}: {text}");
                 self.note(format!("login response {code}: {text}"));
+                // Public nullspace PasswordResponse and SS.NET S2C_LoginResponse:
+                // byte 19 requests demographics independently of the login result.
+                let demographics = p.get(19).copied();
+                eprintln!("[Session] questionnaire flag: {}", match demographics {
+                    Some(0) => "not requested",
+                    Some(_) => "requested",
+                    None => "absent (short login response)",
+                });
+                if code == 0x10 || (matches!(code, 0x00 | 0x06 | 0x0D)
+                    && demographics.is_some_and(|value| value != 0))
+                {
+                    self.fail("New-user questionnaire required.\nAIContinuum cannot submit it yet.\nComplete it in the original Continuum client with this same account\nand server, then reconnect.".into());
+                    self.transport.disconnect();
+                    return;
+                }
                 match code {
                     0x00 | 0x0D => self.send_arena_login(),
                     0x01 => self.send_login(true),
@@ -628,6 +724,7 @@ impl Session {
             0x02 => {
                 self.joined = true;
                 self.phase = Phase::InArena;
+                eprintln!("[Session] joined arena");
                 self.note("joined arena".into());
                 self.try_answer_security();
             }
@@ -760,6 +857,11 @@ impl Session {
                     });
                 }
             }
+            0x2f => {
+                if let Some(arenas) = super::arena_list::parse(p) {
+                    self.arena_list = Some(arenas);
+                }
+            }
             0x07 => {
                 if p.len() >= 5 {
                     let c = Chat { kind: p[1], pid: u16_at(p, 3).unwrap_or(0), text: cstr(&p[5..]) };
@@ -807,6 +909,7 @@ impl Session {
             0x0F => match ArenaSettings::from_packet(p) {
                 Some(s) => {
                     self.settings = Some(Arc::new(s));
+                    eprintln!("[Session] received arena settings");
                     self.note("received arena settings".into());
                     self.try_answer_security();
                 }
@@ -839,6 +942,7 @@ impl Session {
                 }
                 let key = u32_at(p, 13).unwrap_or(0);
                 if key != 0 {
+                    eprintln!("[Session] received map/settings security request");
                     self.pending_security_key = Some(key);
                     self.try_answer_security();
                 }
@@ -862,8 +966,12 @@ impl Session {
                 return;
             }
         }
+        eprintln!("[Session] requesting map download");
         self.note(format!("downloading map {name}"));
-        self.transport.send_reliable(&[0x0C]);
+        // Continuum file requests include a little-endian index (zero is the map).
+        // See nullspace FileRequester::SendNextRequest.
+        let request: &[u8] = if self.continuum_id.is_some() { &[0x0C, 0, 0] } else { &[0x0C] };
+        self.transport.send_reliable(request);
     }
 
     fn on_compressed_map(&mut self, p: &[u8]) {
@@ -886,6 +994,7 @@ impl Session {
     fn load_map(&mut self, data: &[u8]) {
         match Map::parse(data) {
             Ok(m) => {
+                eprintln!("[Session] map loaded");
                 self.map = Some(Arc::new(m));
                 self.try_answer_security();
             }
@@ -913,6 +1022,7 @@ impl Session {
         self.transport.send_reliable(&p);
         self.pending_security_key = None;
         self.security_replies += 1;
+        eprintln!("[Session] sent map/settings security reply (executable checksum unspecified)");
     }
 
     fn accept_timestamp(pl: &mut Player, ts: u16) -> bool {

@@ -3,13 +3,13 @@
 ## Checkout and scope
 
 Repository: https://github.com/Testtube302/Reverse_continuum
-Branch: `codex/continuum-handshake-investigation`
-Implementation commit: `3ed810e7f0c5324059f15e199ddb049f5db9e95a`.
+Current compatibility branch: `codex/continuum-ack-compatibility`
+Original implementation commit: `3ed810e7f0c5324059f15e199ddb049f5db9e95a`.
 Later commits may improve this handoff without changing that implementation.
 
 ```sh
 git fetch origin
-git switch --track origin/codex/continuum-handshake-investigation
+git switch --track origin/codex/continuum-ack-compatibility
 # If the local branch already exists, switch to it instead.
 cargo test
 cargo clippy --all-targets
@@ -28,6 +28,9 @@ requires the explicit `--continuum-expander` option.
   subsequent key-expansion challenge responses.
 - Optional server-owned `scrty1` parser and local command-provider interface.
 - Python reference adapter, pinned Unicorn dependency and validation script.
+- Billing identity codec, 24 synthetic original-routine vectors and a native macOS
+  collector integrated into the launcher; see [field sources and mapping](IDENTITY.md).
+  Build 46bc05e passed the bounded Trench Wars gameplay check described below.
 - Public-reference cipher/finalization vectors and synthetic expansion vectors.
 - Eight synthetic UDP integration tests, examples, and investigation notes.
 
@@ -60,7 +63,7 @@ Local test command, from this checkout on the owner's Mac:
 cargo run --example continuum_login -- 127.0.0.1:5000 '/Users/ryancallicoat/Documents/New project/continuum-local-reference/expand' 90
 ```
 
-This example uses a dedicated test account and an unspecified billing identity.
+This example uses a dedicated test account and the native macOS billing identity.
 Only run it against an authorized local server. The owner chose to keep verification
 local; do not treat this handoff as approval for public-zone testing.
 
@@ -74,8 +77,9 @@ The release build, 82 active unit tests and eight synthetic UDP tests passed.
 
 These results establish a working local compatibility bridge. They do not establish
 standalone Rust expansion, Windows support for the helper, exhaustive coverage of
-all seeds, or acceptance by every public zone. The 64-byte billing identity is zero
-in the CLI path; the executable checksum remains zero. Strict servers may reject it.
+all seeds, or acceptance by every public zone. The macOS CLI now encodes local
+identification with unavailable Windows fields left zero; the executable checksum
+remains zero. Strict servers may reject it.
 
 ## Production review priorities
 
@@ -102,10 +106,176 @@ in the CLI path; the executable checksum remains zero. Strict servers may reject
 
 ## Suggested prompt for Claude
 
-> Review `codex/continuum-handshake-investigation` in Testtube302/Reverse_continuum.
+> Review `codex/continuum-ack-compatibility` in Testtube302/Reverse_continuum.
 > Read docs/research/continuum/REVIEW_HANDOFF.md, the investigation README and NOTES.md.
 > Inspect the implementation, identify production blockers, and make justified fixes
 > on a separate review branch. Verify tests and supported builds. Treat the local
 > reference adapter as an experimental dependency, not completed standalone Rust
 > encryption. Preserve existing user changes, do not upload original-code images,
 > and keep network verification local. Report what is ready to merge and what remains.
+
+### Connection trace for the unresolved public-zone disconnect
+
+Set `AICONTINUUM_TRACE=1` to write `[NetTrace +Nms]` metadata to stderr.
+The desktop Play launcher enables this and appends stderr to
+`connection-diagnostics.log`. Capture covers acknowledgement IDs, nested packet
+kinds, send results, cipher rejections and map-transfer progress, without raw
+payloads, credentials or key material. It stops at 8,192 events per connection
+and prints a limit marker; nested metadata is limited to eight levels.
+The older session diagnostics also retain recent server arena/warning/error text.
+
+Owner-run Trench Wars attempts still accept login and begin map transfer before
+an unexplained core disconnect. The indexed map request and padded expansion
+challenge corrections did not resolve the observed attempt. Do not infer a
+confirmed cause from passing synthetic tests. Use the next owner-run trace to
+identify the actual divergence before changing protocol behavior again.
+
+### New-user questionnaire (2026-10-16)
+
+On `codex/continuum-ack-compatibility`, login diagnostics now include the
+questionnaire flag at offset 19 of S2C 0x0a. Successful login plus a nonzero flag,
+or login result 0x10, produces an explicit questionnaire-required error before
+arena entry. Complete the form in the original client with the **same account and
+server**, then retry. AIContinuum has no form submission UI yet and never sends
+fabricated demographics. Regressions cover eight response variants and preserve
+the error if subsequent arena packets arrive in the same update.
+
+The owner successfully connected on Windows and submitted the form on a different
+account. This is not proof that registration explains the AIContinuum account's
+disconnect: old traces omitted the flag. The next owner-run attempt can distinguish
+this condition. Sources: public nullspace `Connection.cpp` PasswordResponse and
+SS.NET `S2C_LoginResponse.cs` / `IAuth.cs`, with revisions recorded in NOTES.md.
+
+### Arena-entry layout correction (2026-10-16)
+
+The owner's 11:16:20 trace explicitly says questionnaire **not requested**, yet
+disconnects at +733 ms after successful login during map transfer. Questionnaire
+handling is not the blocker in that attempt.
+
+New local captures of original 0.40 confirm its 27-byte arena-entry packet, while
+AIContinuum sent the 26-byte VIE form. Continuum now appends byte 26 with optional
+graphics disabled; VIE stays unchanged. Tests reproduce the previous mismatch,
+verify both layouts, and pass local encrypted login/map entry. The reference
+captures also verified byte-for-byte encryption agreement for outgoing original
+client packets. Captures remain local, outside Git. Public-server success is still
+unverified; do not represent this packet correction as a confirmed Trench Wars fix.
+
+### Successful original-client comparison and remaining disconnect (2026-10-16)
+
+Original 0.40 on Wine 5.5 successfully entered Trench Wars using the currently
+selected saved account over direct UDP from the reference host. The previous
+UDP-over-SSH comparison added a transport variable and failed during download.
+All 2,313 captured encrypted datagrams decoded; every outgoing original packet
+re-encrypted byte-for-byte. Captures and credentials remain outside Git.
+
+Two explicitly approved AIContinuum public tests still failed after login during
+map download: the 27-byte arena correction alone, then a scratch build with
+immediate individual ACKs. The ACK experiment is not included. Neither trace
+received an expansion challenge or requested the questionnaire. Public tests are
+bounded by individual approvals; both approvals were consumed.
+
+Further confirmed layout corrections in this branch:
+
+- Core 0x13 includes a zero u16 version before the seed and 20 words (88 bytes).
+  Verified all reference response words against the expansion helper; this fixes
+  a separate bug, not the immediate disconnect seen without a challenge.
+- Login offset 89 reports the actual destination IPv4 in little-endian numeric
+  order. The previous zero can be classified as SOCKS5 by SS.NET; Trench Wars'
+  treatment of the field is unknown. The bound port, zero redirect login ID and
+  reserved word retain their protocol offsets. No client identity is borrowed.
+
+The cipher comparison establishes agreement for captured packets, not complete
+server acceptance. Login sequencing/timing, host/network differences and billing
+identity remain possible factors. Do not label the build production-ready or the
+Trench Wars issue resolved without a successful AIContinuum arena-entry test.
+
+### Login-address result and 24-bit map support (2026-10-16)
+
+An additional explicitly approved public test of b80e9f4 downloaded the complete
+Trench Wars map instead of receiving the former immediate server disconnect.
+The next failure was local: `bmp: unsupported bit depth 24`. The client itself
+then disconnected. That approval is consumed; arena readiness remains unverified.
+
+The map loader now accepts 24-bit BI_RGB embedded tilesets without quantization,
+while preserving indexed/RLE8 support. The actual downloaded map parses offline
+and all 194,560 RGBA bytes match independent Pillow decoding. Regression fixtures
+are synthetic; the downloaded map remains outside Git. Full local suite: 89 unit
+and 14 synthetic protocol tests pass, one ignored; lint/release builds succeed.
+The desktop build includes these changes with a rollback backup. The next
+explicitly authorized public test must verify map readiness and connection hold.
+
+### Latest result: arena entry succeeds, then SSC reports a restriction
+
+The approved f4edf72 test entered the arena at +354 ms with map/settings loaded,
+then received an SSC network-ban notice and disconnected at +15.549 seconds.
+The server reports BanId #1 with a 2014 expiry. That inconsistent date does not
+prove a current user-account ban; the matching rule (account, route, client
+identity or another server check) is unknown. No expansion/security challenge
+preceded this disconnect. The 90-second hold did not complete.
+
+The UI now retains this server notice instead of only showing a generic close.
+The synthetic regression excludes player chat from this diagnostic. Current
+suite: 89 unit +15 synthetic UDP tests pass, one ignored; clippy/release pass.
+Repo and desktop include all measured fixes and rollback remains available.
+
+Encrypted login, full map download and arena readiness are now demonstrated on
+Trench Wars. Sustained acceptance remains blocked by its explicit restriction.
+The reported BanId/matching rule is unknown. Operator feedback could explain it,
+but local protocol investigation can continue without that feedback. Do not work around it with borrowed
+identities, fabricated integrity values or alternate network routes. No further
+public-test approval remains outstanding.
+
+### Follow-up: missing client identification remains a compatibility hypothesis
+
+The owner reports the same account works in original Continuum on the same
+internet connection as the Mac. This makes a simple account/public-IP ban less
+likely; it does not prove which client field triggers the rejection.
+
+Local-only comparison of the existing reference captures found:
+
+- Original reference traffic continues through 83.462 seconds, with no extra
+  key-expansion challenge or executable-security response in that interval.
+- Its login contains a populated 64-byte billing field; AIContinuum supplies zeros.
+- Two local reference sessions retain the same account and four-byte machine field,
+  but differ in all 64 billing-field bytes. The local/public reference comparison
+  also retains the same machine field with a different account and billing bytes.
+  Only equality/counts were printed; identity values and credentials stay private.
+- AIContinuum currently derives its machine field from the account name, which
+  does not model the reference's account-independent machine field.
+
+SS.NET BillingUdp forwards the machine field and opaque 64-byte field to billing;
+its source does not supply their generation algorithm. The public TCP billing
+specification also distinguishes macid and contid:
+https://wiki.minegoboom.com/index.php/TCP_Billing_Protocol
+This is evidence about protocol roles, not evidence of SSC's matching rule.
+
+The subsequent codec and native collection work is documented in
+[IDENTITY.md](IDENTITY.md). Captured identities were not replayed, and no Windows
+registration information was invented for the Mac. The server's exact matching
+rule remains unknown.
+
+### Successful native Mac identification test (2026-10-16)
+
+Build `46bc05ef298bc700769099f9f1be58e30de9a3ab` is installed on the owner's desktop.
+The owner separately authorized one test at 207.148.16.165:5400 with the selected
+saved account for up to 90 seconds, including brief movement without firing.
+
+- Arena ready at +347 ms.
+- Warbird requested at +20,348 ms; server-confirmed at +20,394 ms.
+- Local movement observed while transmitting regular game position updates.
+- Return to spectator confirmed by the server.
+- Session stayed connected through 90 seconds, then the test disconnected normally.
+- No rejection or repeat of the earlier 15-second SSC notice in this attempt.
+
+The test uses the release library from the same build as the desktop executable.
+The actual GUI separately joined a Warbird on the loopback server. Local tests
+also verified two-client flight, firing/damage/kill reporting and a separate
+90-second hold with two security replies. No public firing/combat test was run.
+The single public-test approval is consumed; it is not permission for more tests.
+
+Rollback: the desktop installation manifest points to
+`.continuum/before-native-identity-20261016-124737`, containing the previous
+executable, helper, manifest and identity notes. Saved profiles, zone list, keys
+and macros were preserved. Main remains unchanged; review the compatibility
+branch before merging. The private runtime-image dependency and Windows collector
+remain production limitations.

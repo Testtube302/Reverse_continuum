@@ -14,9 +14,15 @@ adapter.** `Session::connect_continuum` sends the 165-byte login and the CLI acc
 `--continuum-expander /path/to/helper`. The adapter expands arbitrary key2 values
 locally by emulating a pinned original-code image. It is **not a standalone Rust
 rewrite** of expansion, and the original-code image is not bundled or committed.
-Default connections still use VIE. Executable integrity responses and billing
-identity generation are not implemented; compatibility with all public zones is
-not established.
+Default connections still use VIE. A tested [billing identity codec](IDENTITY.md)
+is available, and the macOS launcher sends an encoded native identity using real
+user/host information and a volume-derived machine word. Windows-only fields
+remain unavailable. Executable integrity responses are unimplemented;
+compatibility with all public zones is not established.
+
+Build `46bc05e` subsequently passed an owner-authorized 90-second Trench Wars
+test with arena entry, server-confirmed Warbird selection, brief movement and
+confirmed return to spectator. See [the recorded test and limits](REVIEW_HANDOFF.md).
 
 The public nullspace cipher was ported under MIT, with its license included here.
 REA/Ghidra observations were used to corroborate the transport structure; no
@@ -109,10 +115,11 @@ after one 64-byte compression, not a standard MD5 digest: the reference updates
 80 bytes but never calls MD5Final. The remaining 16 bytes remain buffered before
 all 20 table words are mixed with the intermediate state and key1.
 
-`decrypt` rejects bad CRCs and noncanonical escape prefixes. Unlike nullspace's
-fallback, it does not accept a CRC calculated over repetitions of the first byte;
-that tolerance has not been established as necessary by our observations. The
-native module's inspected wrapper uses a strict CRC check.
+`decrypt` rejects bad CRCs and noncanonical escape prefixes. Transport now uses
+`decrypt_compatible`, which additionally accepts the public nullspace receive
+variant: CRC calculated over repetitions of the first plaintext byte. Other CRC
+values are rejected. The inspected local native module uses the standard CRC;
+the alternate behavior is tested against independently generated public C++ vectors.
 
 ## Validation
 
@@ -225,10 +232,12 @@ have different relocated imports; it is not accepted automatically. This adapter
 is a reproducible development bridge for the approved image, not a distributable
 replacement for independently implementing the expansion transformations.
 
-The helper contract is one decimal key argument and exactly 80 binary stdout bytes.
+The session helper contract is one decimal key argument and exactly 80 binary stdout bytes.
+The native login path additionally requires `<decimal-nonce> --identity`, also
+returning 80 bytes, for the separate billing-field table.
 Errors go to stderr and produce a failed connection; no VIE fallback is attempted.
-The optional CLI mode sends an unspecified (all-zero) 64-byte billing identity.
-Zone servers treat that field as opaque; billing systems may reject it. The existing
+The macOS CLI now sends the [documented native identity](IDENTITY.md).
+Zone servers treat that field as opaque; billing systems may reject this mapping. The existing
 executable checksum remains zero. Servers enforcing the original executable's
 integrity may reject the client even when encryption is correct.
 
@@ -246,9 +255,10 @@ Use an executable wrapper when passing it as `--continuum-expander`. On this Mac
 Unicorn's cache initialization needs execution outside Codex's restricted sandbox.
 The emulator and original image are not included in the game executable.
 
-Protocol sources: public nullspace `Connection.cpp` documents the 86-byte expansion
-response (`00 13`, seed, twenty words); SS.NET `LoginPacket.cs` documents the
-165-byte Continuum login and opaque billing field. No executable-integrity spoofing
+Protocol sources: original 0.40 captures and TWCore document the 88-byte expansion
+response (`00 13`, u16 version, seed, twenty words); public nullspace omitted the
+version field. SS.NET `LoginPacket.cs` documents the 165-byte Continuum login and
+opaque billing field. No executable-integrity spoofing
 or borrowed billing identity is part of this implementation.
 
 To reproduce the reference-adapter checks with its Python environment:
@@ -259,3 +269,27 @@ python tools/protocol/check_continuum_reference.py /path/to/approved-runtime-cod
 
 Omit `--server-cache` for synthetic-vector checks only. The user elected to keep
 all login verification local; no public-zone login was performed.
+
+## Acknowledgement compatibility correction
+
+After the owner reported an acknowledgement timeout on SSCU Trench Wars, comparison
+with pinned nullspace `Connection.cpp` found that our handshake incorrectly required
+a four-byte zero VIE-style key after decrypted `00 02`. Continuum has already
+exchanged its keys; the reference client accepts that acknowledgement without
+interpreting its optional body. The corrected transport accepts short `00 02` and
+optional nonzero body bytes after successful decryption/CRC validation. VIE's key
+validation and the rule against accepting a plaintext Continuum ack are preserved.
+
+The transport also restores nullspace's repeated-first-byte CRC compatibility.
+`legacy-crc-vectors.txt` is independently generated by the pinned public C++ cipher
+and CRC functions, including a short acknowledgement used in a loopback regression.
+Regenerate it with:
+
+```sh
+python3 tools/protocol/generate_continuum_vectors.py /path/to/nullspace --legacy-crc > docs/research/continuum/legacy-crc-vectors.txt
+```
+
+These are confirmed differences from the public reference, not a confirmed capture
+of Trench Wars' response. No public-server connection was made during diagnosis.
+Bounded stderr diagnostics report handshake packet lengths, decoded core type and
+decode failure category, without packet contents, credentials or key tables.
