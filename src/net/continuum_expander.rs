@@ -27,6 +27,11 @@ impl CommandExpander {
 
     fn run(&self, seed: u32, identity: bool) -> io::Result<[u32; 20]> {
         let mut command = Command::new(&self.program);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000); // CREATE_NO_WINDOW; keep stdout pipe for the table.
+        }
         command.arg(seed.to_string());
         if identity {
             command.arg("--identity");

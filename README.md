@@ -69,3 +69,11 @@ cargo test                                      # unit tests
 AICONTINUUM_ASSETS=/path/to/Continuum cargo test # + decoding real assets
 AICONTINUUM_SERVER=127.0.0.1:5000 cargo test -- --test-threads=1  # + live zone tests (~1 min)
 ```
+
+## Windows and Linux preview packages
+
+See [platform setup and packaging](docs/PLATFORMS.md). Native CI builds package the
+client and its Python/Unicorn helper together; original game assets and the private
+reference image are supplied separately. Windows/Linux identity collectors and
+per-user settings paths are implemented, but public-server and desktop acceptance
+must be verified on the destination OS.

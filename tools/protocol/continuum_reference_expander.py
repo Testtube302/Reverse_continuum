@@ -102,7 +102,9 @@ def main():
     try:
         if len(sys.argv) not in (2, 3) or (len(sys.argv) == 3 and sys.argv[2] != "--identity"):
             raise ValueError("usage: continuum_reference_expander.py <decimal-seed> [--identity]")
-        image = Path(os.environ["AICONTINUUM_RUNTIME_CODE"]).read_bytes()
+        base = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
+        image_path = Path(os.environ.get("AICONTINUUM_RUNTIME_CODE", base / "runtime-code.bin"))
+        image = image_path.read_bytes()
         result = expand(image, int(sys.argv[1], 10), identity=len(sys.argv) == 3)
         sys.stdout.buffer.write(result)
     except (KeyError, OSError, ValueError, UcError) as error:

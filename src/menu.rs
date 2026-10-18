@@ -64,7 +64,7 @@ impl MenuScreen {
             .unwrap_or_default();
         let mut launcher = Launcher::new(skin, extra, tips, spectate, ships, font, templates, profile, zones);
         launcher.select_skin_from_profile();
-        launcher.data_dir = Some(assets.path(""));
+        launcher.data_dir = Some(assets.data_root());
         if let Ok(b) = assets.read("keyboard.dat") {
             launcher.keysets = keys::parse_keysets(&String::from_utf8_lossy(&b));
         }
@@ -75,7 +75,7 @@ impl MenuScreen {
         let canvas = Canvas::new(w, h);
         let texture = Texture2D::from_rgba8(w as u16, h as u16, &canvas.px);
         texture.set_filter(FilterMode::Nearest);
-        Ok(Self { launcher, canvas, texture, assets_root: assets.path(""), wheel: 0.0, last_click: None })
+        Ok(Self { launcher, canvas, texture, assets_root: assets.data_root(), wheel: 0.0, last_click: None })
     }
 
     fn save(&mut self) {

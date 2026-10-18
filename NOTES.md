@@ -845,3 +845,28 @@
   bounded text, arena packet IDs/length, automatic plaintext/VIE round trips,
   no downgrade after key exchange, and preserved Continuum login format.
   No public-zone tests or messages to real players were performed.
+
+- Windows/Linux portability (2026-10-18): Windows uses documented GetUserNameA /
+  GetComputerNameA, system-volume serial via GetWindowsDirectoryW +
+  GetVolumePathNameW + GetVolumeInformationW, current timezone bias via
+  GetTimeZoneInformation, and BCryptGenRandom. Linux uses libc user/host/timezone,
+  system machine-id mapped into the legacy 32-bit machine word, and /dev/urandom.
+  Legacy metadata whose source is unresolved stays zero. No captured machine
+  identity, registry guess, account-derived identifier or integrity spoof is used.
+  Windows MSVC-native execution/server acceptance is not established by the local
+  MinGW release build. API references and validation limits: docs/PLATFORMS.md.
+- Windows helper discovery selects .continuum/expand.exe and suppresses helper
+  console windows while retaining its binary stdout pipe. Unix keeps expand.
+  Frozen helper resolves runtime-code.bin beside itself; explicit environment
+  override remains. Native-OS PyInstaller packaging includes Python/Unicorn,
+  helper source and license metadata, checks the missing-image diagnostic, hashes
+  output files, and creates archives. Default packaging excludes private runtime,
+  game assets and personal settings. Optional private image requires an explicit
+  flag and the pinned SHA256; no private input is passed to public CI.
+- Windows/Linux settings/maps use per-user writable data directories with copy-if-
+  absent migration. AICONTINUUM_DATA and .portable offer explicit overrides; the
+  existing Mac portable location is unchanged. Asset reads resolve mixed-case
+  path components for Linux. Regression fixture checks casing and preservation.
+- Local sequential tests pass, clippy retains prior warning counts, and both Mac
+  release and Windows GNU release/test compilation succeed. Native platform CI
+  and private-image/desktop gameplay testing are separate validation stages.
