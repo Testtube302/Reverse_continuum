@@ -870,3 +870,10 @@
 - Local sequential tests pass, clippy retains prior warning counts, and both Mac
   release and Windows GNU release/test compilation succeed. Native platform CI
   and private-image/desktop gameplay testing are separate validation stages.
+- Final local portability checks: 99 library tests, 3 frontend tests, 18 transport
+  tests and the chat fixture pass (one ignored unit; live/assets unconfigured).
+  Clippy warning counts remain unchanged. Mac and Windows GNU release builds pass.
+  A frozen macOS helper matches the script's exact 80-byte results for four
+  synthetic session/identity cases using the existing private image in place.
+  Packaging also passes its missing-image/dependency smoke check. This validates
+  the packaging mechanism on Mac, not native Windows/Linux desktop behavior.

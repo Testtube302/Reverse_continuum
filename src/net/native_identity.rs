@@ -183,12 +183,7 @@ mod platform {
     fn linux_machine_id() -> io::Result<u32> {
         let id = std::fs::read_to_string("/etc/machine-id")
             .or_else(|_| std::fs::read_to_string("/var/lib/dbus/machine-id"))?;
-        let id = id.trim();
-        if id.len() != 32 || !id.bytes().all(|b| b.is_ascii_hexdigit()) || id.bytes().all(|b| b == b'0') {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "local machine identity is unavailable"));
-        }
-        // Native mapping into the protocol's 32-bit field; never transmit the raw ID.
-        Ok((crc32(format!("AIContinuum:{}", id.to_ascii_lowercase()).as_bytes()) as i32).unsigned_abs().max(1))
+        super::linux_machine_word(&id)
     }
 
     fn timezone_bias() -> io::Result<i16> {
@@ -217,6 +212,30 @@ mod platform {
             assert!(fields[..11].iter().all(|&word| word == 0) && fields[13] == 0);
             assert!(fields[11] == !crc32(&username().unwrap()));
             assert!(fields[12] == !crc32(&hostname().unwrap()));
+        }
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn linux_machine_word(id: &str) -> io::Result<u32> {
+    let id = id.trim();
+    if id.len() != 32 || !id.bytes().all(|b| b.is_ascii_hexdigit()) || id.bytes().all(|b| b == b'0') {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "local machine identity is unavailable"));
+    }
+    // Native mapping into the protocol's 32-bit field; never transmit the raw ID.
+    Ok((crate::lvl::crc32(format!("AIContinuum:{}", id.to_ascii_lowercase()).as_bytes()) as i32).unsigned_abs().max(1))
+}
+
+#[cfg(test)]
+mod linux_mapping_tests {
+    #[test]
+    fn validates_and_normalizes_system_id() {
+        let id = "0123456789abcdef0123456789abcdef";
+        let value = super::linux_machine_word(id).unwrap();
+        assert_ne!(value, 0);
+        assert_eq!(value, super::linux_machine_word(&format!("{}\n", id.to_uppercase())).unwrap());
+        for invalid in ["", "uninitialized", "00000000000000000000000000000000", "0123456789abcdef0123456789abcdeg"] {
+            assert!(super::linux_machine_word(invalid).is_err());
         }
     }
 }

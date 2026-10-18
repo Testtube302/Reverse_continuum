@@ -65,6 +65,7 @@ def main():
     shutil.copy2(REPO / 'docs/PLATFORMS.md', output / 'START-HERE.md')
     commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=REPO, text=True).strip()
     manifest = {'commit': commit, 'os': platform.system(), 'architecture': platform.machine(),
+        'dirty_source': bool(subprocess.check_output(['git', 'status', '--porcelain', '--untracked-files=no'], cwd=REPO)),
         'private_runtime_included': image is not None, 'assets_included': False,
         'sha256': {str(p.relative_to(output)): hashlib.sha256(p.read_bytes()).hexdigest()
             for p in output.rglob('*') if p.is_file()}}
