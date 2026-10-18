@@ -98,8 +98,34 @@ def expand(image, seed, *, identity=False):
     return bytes(emu.mem_read(table, 80))
 
 
+def self_test():
+    """Original synthetic x86 fixture: callbacks, FPU state, stop and resume.
+
+    Contains no reference image or account data; safe for public native CI.
+    """
+    for _ in range(3):
+        emu = Uc(UC_ARCH_X86, UC_MODE_32)
+        emu.mem_map(0x1000, 0x1000)
+        # INC EAX; INC EAX; NOP; HLT
+        emu.mem_write(0x1000, b"\x40\x40\x90\xf4")
+        visits = []
+        def hook(cpu, address, size, context):
+            visits.append(address)
+        emu.hook_add(UC_HOOK_CODE, hook, begin=0x1000, end=0x1003)
+        emu.reg_write(UC_X86_REG_FPCW, 0x27f)
+        emu.reg_write(UC_X86_REG_FPTAG, 0xffff)
+        emu.emu_start(0x1000, 0x1004, timeout=2_000_000, count=1)
+        emu.emu_start(emu.reg_read(UC_X86_REG_EIP), 0x1004, timeout=2_000_000, count=100)
+        if emu.reg_read(UC_X86_REG_EAX) != 2 or visits != [0x1000, 0x1001, 0x1002, 0x1003]:
+            raise ValueError("emulator callback/stop/resume self-test failed")
+    sys.stdout.buffer.write(b"Unicorn self-test passed\n")
+
+
 def main():
     try:
+        if sys.argv[1:] == ['--self-test']:
+            self_test()
+            return 0
         if len(sys.argv) not in (2, 3) or (len(sys.argv) == 3 and sys.argv[2] != "--identity"):
             raise ValueError("usage: continuum_reference_expander.py <decimal-seed> [--identity]")
         base = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent

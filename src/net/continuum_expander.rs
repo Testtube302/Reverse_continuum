@@ -32,6 +32,11 @@ impl CommandExpander {
             use std::os::windows::process::CommandExt;
             command.creation_flags(0x08000000); // CREATE_NO_WINDOW; keep stdout pipe for the table.
         }
+        // Windows bundles a private CPython interpreter instead of a frozen
+        // PyInstaller host (Unicorn #2281). No PATH/system Python is consulted.
+        if self.program.file_name().is_some_and(|name| name == "python.exe") {
+            command.arg("-I").arg("-B").arg(self.program.with_file_name("continuum_reference_expander.py"));
+        }
         command.arg(seed.to_string());
         if identity {
             command.arg("--identity");
@@ -53,7 +58,9 @@ impl CommandExpander {
             }
             String::from_utf8_lossy(&kept).trim().to_string()
         });
-        let deadline = Instant::now() + Duration::from_secs(5);
+        // Identity runs before network login; allow cold interpreter/security scanning.
+        // In-session challenges retain the short response deadline.
+        let deadline = Instant::now() + Duration::from_secs(if identity { 15 } else { 5 });
         let status = loop {
             match child.try_wait() {
                 Ok(Some(status)) => break status,

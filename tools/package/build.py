@@ -33,13 +33,20 @@ def main():
     suffix = '.exe' if os.name == 'nt' else ''
     output.mkdir(parents=True)
     shutil.copy2(REPO / 'target/release' / ('AIContinuum' + suffix), output)
-    with tempfile.TemporaryDirectory(prefix='aic-package-') as temp:
-        temp = Path(temp)
-        subprocess.run([sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean', '--onedir',
-            '--name', 'expand', '--noupx', '--collect-all', 'unicorn', '--copy-metadata', 'unicorn',
-            '--distpath', str(temp / 'dist'), '--workpath', str(temp / 'build'), '--specpath', str(temp),
-            str(REPO / 'tools/protocol/continuum_reference_expander.py')], check=True)
-        shutil.copytree(temp / 'dist/expand', output / '.continuum', symlinks=True)
+    if os.name == 'nt':
+        from windows_python import build as build_windows_python
+        build_windows_python(output / '.continuum', REPO / 'tools/protocol/continuum_reference_expander.py')
+        helper = [str(output / '.continuum/python.exe'), '-I', '-B',
+                  str(output / '.continuum/continuum_reference_expander.py')]
+    else:
+        with tempfile.TemporaryDirectory(prefix='aic-package-') as temp:
+            temp = Path(temp)
+            subprocess.run([sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean', '--onedir',
+                '--name', 'expand', '--noupx', '--collect-all', 'unicorn', '--copy-metadata', 'unicorn',
+                '--distpath', str(temp / 'dist'), '--workpath', str(temp / 'build'), '--specpath', str(temp),
+                str(REPO / 'tools/protocol/continuum_reference_expander.py')], check=True)
+            shutil.copytree(temp / 'dist/expand', output / '.continuum', symlinks=True)
+        helper = [str(output / '.continuum/expand')]
     # Explicitly include helper source and upstream license metadata.
     source = output / '.continuum/source'
     source.mkdir()
@@ -58,10 +65,15 @@ def main():
     # A deliberately missing image must fail clearly, not crash due to missing Python/Unicorn.
     env = dict(os.environ)
     env['AICONTINUUM_RUNTIME_CODE'] = str(output / '.continuum/nonexistent-test-image.bin')
-    smoke = subprocess.run([str(output / '.continuum' / ('expand' + suffix)), '123'],
+    smoke = subprocess.run(helper + ['123'],
         capture_output=True, env=env, timeout=15)
     if smoke.returncode != 1 or b'Continuum reference expansion failed:' not in smoke.stderr:
         raise RuntimeError('packaged helper failed its dependency/diagnostic smoke test')
+    # Exercise the native emulator and callbacks, not merely Python imports.
+    probe = subprocess.run(helper + ['--self-test'], capture_output=True, env=env, timeout=15,
+                           cwd=tempfile.gettempdir())
+    if probe.returncode != 0 or probe.stdout != b'Unicorn self-test passed\n':
+        raise RuntimeError(f'packaged emulator self-test failed ({probe.returncode}): {probe.stderr!r}')
     shutil.copy2(REPO / 'docs/PLATFORMS.md', output / 'START-HERE.md')
     if sys.platform == 'darwin':
         from macos_app import build as build_app

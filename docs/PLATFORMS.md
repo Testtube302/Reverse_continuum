@@ -92,3 +92,15 @@ API/build references:
 - [Windows system RNG](https://learn.microsoft.com/en-us/windows/win32/api/bcrypt/nf-bcrypt-bcryptgenrandom)
 - [Windows computer name](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getcomputernamea)
 - [PyInstaller packaging](https://pyinstaller.org/en/stable/usage.html)
+
+### Windows helper packaging update
+
+Windows uses an application-local CPython interpreter and Unicorn package inside
+`.continuum`, automatically started by AIContinuum.exe. Python's isolated mode and
+`._pth` file keep module imports within that folder. No separate Python install or
+manual helper launch is needed. Other platforms retain their frozen helper.
+This avoids the PyInstaller host implicated in [Unicorn #2281](https://github.com/unicorn-engine/unicorn/issues/2281)
+(Windows 11 exit 0xc0000409). No Windows security policy is changed.
+Native packaging tests now execute synthetic emulated code with callbacks, rather
+than only checking missing-image errors. Actual encrypted-zone acceptance still
+requires testing the complete bundle on the destination computer.

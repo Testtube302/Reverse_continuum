@@ -739,8 +739,11 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
                 map_dir: assets.data_root().join("zones").join(zone_dir),
             };
             let bundled_expander = std::env::current_exe().ok()
-                .and_then(|path| path.parent().map(|dir| dir.join(".continuum").join(if cfg!(windows) { "expand.exe" } else { "expand" })))
-                .filter(|path| path.is_file());
+                .and_then(|path| path.parent().map(|dir| dir.join(".continuum")))
+                .and_then(|dir| {
+                    let names: &[&str] = if cfg!(windows) { &["python.exe", "expand.exe"] } else { &["expand"] };
+                    names.iter().map(|name| dir.join(name)).find(|path| path.is_file())
+                });
             let session = if let Some(program) = args.continuum_expander.as_ref().or(bundled_expander.as_ref()) {
                 diagnostics::record("zone entry: starting encryption helper");
                 let mut expander = aicontinuum::net::continuum_expander::CommandExpander::new(program.clone());

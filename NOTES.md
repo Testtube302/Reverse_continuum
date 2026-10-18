@@ -917,3 +917,17 @@
   release build pass; clippy retains existing warnings. A deliberately failing local
   helper produces a readable screenshot and diagnostic report, without contacting a
   public server. Native Windows CI and affected-machine retest remain separate checks.
+
+- Windows helper failure isolated by user report: graphics complete; identity helper
+  first times out, then exits 0xc0000409. Unicorn upstream #2281 reports this exact
+  status with PyInstaller/CFG hosts on Windows 11; it is a matching hypothesis, not
+  a crash-dump confirmation. Windows bundles now use a private CPython interpreter
+  with isolated ._pth paths instead of the PyInstaller host. The client invokes it
+  directly with isolated mode; no system installation, extra launch step, executable
+  flag patch, or Windows security setting changes. Initial identity startup permits
+  15 seconds for cold startup; session expansions retain the five-second limit.
+- Packaging now executes original synthetic x86 instructions with callbacks, FPU
+  setup, instruction-count stop/resume and a bounded timeout. This requires no
+  proprietary image and catches native-emulator crashes missed by import-only tests.
+  Sources: https://github.com/unicorn-engine/unicorn/issues/2281 and
+  https://docs.python.org/3.12/using/windows.html#finding-modules.
