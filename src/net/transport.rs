@@ -377,6 +377,12 @@ impl Transport {
                 }
                 Ok(_) => {}
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                #[cfg(windows)]
+                Err(e) if e.raw_os_error() == Some(10040) => {
+                    // Winsock consumes an oversized UDP datagram and reports WSAEMSGSIZE,
+                    // whereas Unix returns a truncated buffer. Drop it on either platform.
+                    self.trace(|| "RX ignored: datagram exceeds receive buffer".into());
+                }
                 Err(e) if e.kind() == io::ErrorKind::ConnectionRefused => {
                     // ICMP port unreachable from an earlier send; keep trying during handshake.
                     if self.state == State::Connected {

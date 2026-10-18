@@ -882,3 +882,11 @@
   source pushes but the OAuth login lacks workflow scope, so the CI recipe is
   checked in as tools/package/platforms.yml for review; activation and native
   Windows/Linux package execution are pending. No private inputs were uploaded.
+
+- Native Windows CI exposed WSAEMSGSIZE (10040) when a UDP datagram exceeds the
+  receive buffer: Winsock reports an error and consumes the datagram, unlike Unix's
+  successful truncated read. Transport now drops that datagram without failing
+  the connection. The existing oversized-datagram regression also verifies a
+  subsequent valid encrypted packet still arrives. Source:
+  https://learn.microsoft.com/en-us/windows/win32/api/winsock/nf-winsock-recv.
+  GitHub workflow access is now authorized and native Windows/Linux CI is active.
