@@ -39,8 +39,20 @@ impl CommandExpander {
         let mut child = command
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::piped())
             .spawn()?;
+        // Drain stderr concurrently: a Python loader traceback can exceed a pipe buffer.
+        let mut stderr = child.stderr.take().expect("piped stderr");
+        let errors = std::thread::spawn(move || {
+            let mut kept = Vec::new();
+            let mut buffer = [0; 1024];
+            while let Ok(count) = stderr.read(&mut buffer) {
+                if count == 0 { break; }
+                let keep = count.min(8192usize.saturating_sub(kept.len()));
+                kept.extend_from_slice(&buffer[..keep]);
+            }
+            String::from_utf8_lossy(&kept).trim().to_string()
+        });
         let deadline = Instant::now() + Duration::from_secs(5);
         let status = loop {
             match child.try_wait() {
@@ -51,14 +63,16 @@ impl CommandExpander {
                 outcome => {
                     let _ = child.kill();
                     let _ = child.wait();
+                    let _ = errors.join();
                     return Err(outcome.err().unwrap_or_else(|| {
                         io::Error::new(io::ErrorKind::TimedOut, "key expansion helper timed out")
                     }));
                 }
             }
         };
+        let detail = errors.join().unwrap_or_default();
         if !status.success() {
-            return Err(io::Error::other("key expansion helper failed"));
+            return Err(io::Error::other(format!("key expansion helper failed ({status}): {detail}")));
         }
         let mut bytes = Vec::new();
         child
@@ -86,6 +100,19 @@ fn decode_table(bytes: &[u8]) -> io::Result<[u32; 20]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    #[test]
+    fn preserves_helper_failure_reason_without_pipe_deadlock() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = std::env::temp_dir().join(format!("aic-expander-error-{}.sh", std::process::id()));
+        std::fs::write(&path, "#!/bin/sh\necho 'missing runtime fixture' >&2\ni=0; while [ $i -lt 2000 ]; do echo diagnostic >&2; i=$((i+1)); done\nexit 7\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let error = CommandExpander::new(path.clone()).expand(0).unwrap_err().to_string();
+        std::fs::remove_file(path).unwrap();
+        assert!(error.contains("missing runtime fixture"));
+        assert!(error.len() < 8400);
+    }
+
     #[test]
     fn requires_exact_binary_table() {
         for size in [0, 79, 81, 160] {

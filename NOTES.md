@@ -904,3 +904,16 @@
   and helper paths, preserves connection diagnostics, and forwards arguments.
   The raw client is inside Contents/MacOS; no separate command launcher is needed.
   Assets/settings/helper remain beside the app in the existing installation folder.
+
+- Windows zone-entry failure visibility (2026-10-18): a user reports a black screen
+  and apparent exit after selecting a zone. Exact destination-machine cause remains
+  unconfirmed. Initial helper/connection errors previously called process::exit;
+  now display a persistent error screen and return to the launcher on Enter/Escape.
+  Startup stages and phase transitions are recorded in the writable data directory's
+  startup-diagnostics.log (no command lines, credentials or packet dumps). Windows
+  fatal asset errors also show a native error dialog. Helper stderr is drained and
+  bounded to retain loader/runtime failure reasons without filling its pipe.
+- Validation: sequential local regression suite passes, Windows cross-check and Mac
+  release build pass; clippy retains existing warnings. A deliberately failing local
+  helper produces a readable screenshot and diagnostic report, without contacting a
+  public server. Native Windows CI and affected-machine retest remain separate checks.

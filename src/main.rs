@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::PathBuf;
 
+mod diagnostics;
 mod hud;
 mod menu;
 
@@ -219,6 +220,9 @@ fn window_conf() -> Conf {
 
 fn die(msg: impl std::fmt::Display) -> ! {
     eprintln!("{msg}");
+    diagnostics::record(&format!("fatal: {msg}"));
+    #[cfg(windows)]
+    diagnostics::show_fatal(&msg.to_string());
     std::process::exit(1);
 }
 
@@ -645,6 +649,7 @@ async fn main() {
     let args = parse_args();
     let assets = AssetDir::locate(args.assets.as_deref()).unwrap_or_else(|e| die(e));
     assets.prepare_data().unwrap_or_else(|e| die(format!("prepare writable settings: {e}")));
+    diagnostics::install(&assets.data_root());
     if !launcher_mode() {
         return run_game(args, &assets).await;
     }
@@ -683,9 +688,39 @@ fn launcher_mode() -> bool {
     a.iter().any(|a| a == "--launcher") || !a.iter().any(|a| ["--connect", "--map", "--offline", "--screenshot"].contains(&a.as_str()))
 }
 
+/// Keep startup failures visible instead of exiting and closing the Windows console.
+async fn connection_error(message: &str, args: &Args) {
+    diagnostics::record(message);
+    let text = format!("{message}\n\nReport: {}\n\nPress Enter or Escape to return.", diagnostics::path());
+    loop {
+        clear_background(BLACK);
+        let columns = ((screen_width() - 48.0) / 10.0).max(20.0) as usize;
+        let mut y = 48.0;
+        for line in text.lines() {
+            let chars: Vec<char> = line.chars().collect();
+            if chars.is_empty() { y += 22.0; }
+            for chunk in chars.chunks(columns) {
+                draw_text(&chunk.iter().collect::<String>(), 24.0, y, 20.0, WHITE);
+                y += 22.0;
+            }
+        }
+        if let Some((path, _)) = &args.screenshot {
+            get_screen_data().export_png(&path.to_string_lossy());
+            break;
+        }
+        if is_key_pressed(KeyCode::Escape) || is_key_pressed(KeyCode::Enter) || is_quit_requested() { break; }
+        next_frame().await;
+    }
+}
+
 async fn run_game(mut args: Args, assets: &AssetDir) {
     let assets = assets;
+    diagnostics::record("zone entry: loading graphics");
+    clear_background(BLACK);
+    draw_text("Preparing zone connection...", 24.0, 48.0, 24.0, WHITE);
+    next_frame().await;
     let gfx = Graphics::load(&assets);
+    diagnostics::record("zone entry: graphics loaded");
     let mut hud = hud::Hud::load(&assets);
     hud.statbox = args.statbox;
     let mut sounds = Sounds {
@@ -707,9 +742,11 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
                 .and_then(|path| path.parent().map(|dir| dir.join(".continuum").join(if cfg!(windows) { "expand.exe" } else { "expand" })))
                 .filter(|path| path.is_file());
             let session = if let Some(program) = args.continuum_expander.as_ref().or(bundled_expander.as_ref()) {
+                diagnostics::record("zone entry: starting encryption helper");
                 let mut expander = aicontinuum::net::continuum_expander::CommandExpander::new(program.clone());
                 aicontinuum::net::native_identity::prepare(|nonce| expander.expand_identity(nonce))
                     .and_then(|identity| {
+                        diagnostics::record("zone entry: encryption helper completed identity expansion");
                         eprintln!("[Session] native identity prepared; unresolved legacy fields remain absent");
                         Session::connect_auto_identified(config, move |seed| match expander.expand(seed) {
                             Ok(table) => Some(table),
@@ -719,7 +756,16 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
             } else {
                 Session::connect(config)
             };
-            Game::online(session.unwrap_or_else(|e| die(format!("connect {server}: {e}"))))
+            match session {
+                Ok(session) => {
+                    diagnostics::record("zone entry: transport connected");
+                    Game::online(session)
+                }
+                Err(error) => {
+                    connection_error(&format!("Could not connect: {error}"), &args).await;
+                    return;
+                }
+            }
         }
         None => {
             let map_path = args.map.clone().or_else(|| {
@@ -744,6 +790,7 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
         game.camera = at; // online: initial spectator camera
     }
     let mut tiles: Option<Tiles> = None;
+    let mut last_phase = None;
     let mut requested_initial_ship = false;
     let mut placed_at = false;
     // Test aid (--carry-to): leave the ship after the throw so we don't catch the ball again.
@@ -899,10 +946,18 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
             hud.chat_input = None;
         }
         game.frame();
+        if let Some(session) = &game.session
+            && last_phase.as_ref() != Some(&session.phase)
+        {
+            diagnostics::record(&format!("connection phase: {:?}", session.phase));
+            last_phase = Some(session.phase.clone());
+        }
 
         let ready = game.world().is_some();
         if ready && tiles.is_none() {
+            diagnostics::record("zone entry: creating map textures");
             tiles = Some(Tiles::for_map(game.world().unwrap().0, &assets));
+            diagnostics::record("zone entry: map ready");
         }
         if ready && !requested_initial_ship && game.session.is_some() {
             requested_initial_ship = true;
