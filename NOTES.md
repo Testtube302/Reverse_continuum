@@ -877,3 +877,8 @@
   synthetic session/identity cases using the existing private image in place.
   Packaging also passes its missing-image/dependency smoke check. This validates
   the packaging mechanism on Mac, not native Windows/Linux desktop behavior.
+- Linux x86_64-unknown-linux-gnu code and test cross-check also passes. Updated
+  Mac binary joins the local encrypted zone with a dummy account. GitHub accepts
+  source pushes but the OAuth login lacks workflow scope, so the CI recipe is
+  checked in as tools/package/platforms.yml for review; activation and native
+  Windows/Linux package execution are pending. No private inputs were uploaded.

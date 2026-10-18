@@ -55,9 +55,16 @@ The optional `--runtime-code /private/path/runtime-code.bin` adds the verified i
 only to a private local package. It is not used by GitHub Actions. Game assets and
 saved accounts are never copied by this script. Keep private packages out of Git.
 
-The `Native platform checks` workflow builds and tests Windows and Linux on native
-GitHub runners. Its artifacts contain executables/support libraries, never the
-private reference image or game assets.
+The CI recipe at `tools/package/platforms.yml` is ready to install as
+`.github/workflows/platforms.yml`. Publishing that active workflow requires GitHub
+`workflow` permission; it has not run yet. Once activated, it builds/tests Windows
+and Linux on native runners. Its artifacts contain executables/support libraries,
+never the private reference image or game assets.
+
+Current evidence: macOS regression tests, release build, packaged-helper equivalence
+and local encrypted arena entry pass. Windows GNU release build and test compilation
+pass. Linux x86-64 code/test cross-check passes. Native Windows/Linux execution and
+complete destination-platform packages remain pending.
 
 ## Identity mapping and validation limits
 
