@@ -805,3 +805,43 @@
   hit the existing questionnaire UDP-response timing assertion; sequential rerun
   passes. Clippy retains prior warnings, release and Windows checks pass. No public
   zone test or server configuration changes.
+
+- Routed chat and arena switching (2026-10-18): C2S 0x06 uses types 2 public,
+  3 own frequency, 4 selected player's frequency, 5 local private, 7 remote
+  private, 9 channel. Prefixes: // or apostrophe, double quote, slash,
+  :name:body, semicolon respectively. Local names use exact case-insensitive
+  matching; unknown names retain :name:body for billing-server delivery. Missing
+  targets and malformed private syntax fail locally, never fall through to public.
+  Both typed input and macros use this path; wire text is bounded to 240 bytes.
+  Sources: https://github.com/plushmonkey/nullspace (src/null/ChatController.cpp,
+  ChatController.h) and https://github.com/gigamon-dev/SubspaceServer
+  (src/Core/Modules/Chat.cs). Remote/channel incoming strings are already formatted;
+  local private echoes explicitly identify the recipient. No pixel-parity claim.
+- Esc A now selects with Up/Down/wheel and joins with Enter. ?go, ?go NUMBER,
+  and ?go NAME send C2S 0x01 over the existing reliable connection: 0xFFFF for
+  default, numeric public arena ID, 0xFFFD + name for named arenas. Continuum
+  retains its 27th LVZ byte. Reset arena world/settings/map/effects/selection and
+  cached graphics, preserve zone transport and chat. Source: nullspace
+  Connection::SendArenaLogin and ChatController's ?go command handling.
+- Automatic startup discovers .continuum/expand beside the executable. With the
+  helper it advertises Continuum login and accepts a valid explicit initial VIE
+  or plaintext key reply, as supported by SS.NET EncryptionVIE.cs and
+  EncryptionNull.cs. Preserve 0x24 login even when transport is unencrypted;
+  preserve the expansion callback for subsequent session challenges. Strict
+  Continuum API stays strict; no downgrade after Continuum keys arrive. Without
+  a helper the executable retains the existing VIE/plaintext connection path.
+  This is installation-folder support, not standalone key expansion or a portable
+  installer. Original runtime code, assets and personal settings remain outside git.
+- Local validation: three dummy clients verify own-team, named-private and
+  selected-private delivery with no messages to the other team. Initial test
+  requested private frequencies rejected by local server policy; revised fixture
+  uses server-assigned public teams. Arena switching duel -> 0 preserves the UDP
+  endpoint and receives fresh map/settings/self. SS.NET caches population counts
+  for 1000 ms (ArenaManager.GetPopulationSummary); wait for refresh before asserting
+  the negative-count current-arena marker. The live switch test passes with that
+  wait. Automatic Continuum connections are used by these final local checks.
+- GUI screenshot on loopback verifies selection marker, current marker, player
+  counts and Enter-to-join hint. Synthetic tests cover all prefixes/errors,
+  bounded text, arena packet IDs/length, automatic plaintext/VIE round trips,
+  no downgrade after key exchange, and preserved Continuum login format.
+  No public-zone tests or messages to real players were performed.

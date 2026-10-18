@@ -453,8 +453,9 @@ impl Hud {
                 let (text, color) = match c.kind {
                     0 => (c.text.clone(), TextColor::Green),              // arena
                     2 | 1 => (format!("{sender:>10}> {}", c.text), TextColor::Blue), // public
-                    3 => (format!("{sender:>10}> {}", c.text), TextColor::Yellow),   // team
-                    5 | 7 => (format!("{sender:>10}> {}", c.text), TextColor::Green), // private
+                    3 | 4 => (format!("{sender:>10}> {}", c.text), TextColor::Yellow),   // team
+                    5 => (format!("{sender:>10}> {}", c.text), TextColor::Green),
+                    7 | 9 => (c.text.clone(), TextColor::Green), // private
                     6 | 8 => (c.text.clone(), TextColor::Red),
                     _ => (c.text.clone(), TextColor::White),
                 };
@@ -806,11 +807,13 @@ pub fn draw_statbox(hud: &Hud, game: &Game, view: u8) {
 }
 
 /// Scrollable server arena-list response. Does not switch arenas automatically.
-pub fn draw_arena_list(hud: &Hud, game: &Game, offset: &mut usize, timed_out: bool) {
+pub fn draw_arena_list(hud: &Hud, game: &Game, offset: &mut usize, selected: usize, timed_out: bool) {
     let Some(session) = &game.session else { return };
     let arenas = session.arena_list.as_deref();
     let count = arenas.map_or(0, |a| a.len());
     let capacity = ((screen_height() - 100.0) / FONT_H).max(1.0) as usize;
+    *offset = (*offset).min(selected);
+    if selected >= *offset + capacity { *offset = selected + 1 - capacity; }
     *offset = (*offset).min(count.saturating_sub(capacity));
     let rows = count.min(capacity).max(1);
     let w = 368.0;
@@ -829,14 +832,14 @@ pub fn draw_arena_list(hud: &Hud, game: &Game, offset: &mut usize, timed_out: bo
         Some(arenas) => {
             for (i, arena) in arenas.iter().skip(*offset).take(capacity).enumerate() {
                 let name: String = arena.name.chars().take(28).collect();
-                let marker = if arena.current { '*' } else { ' ' };
+                let marker = if i + *offset == selected { '>' } else if arena.current { '*' } else { ' ' };
                 let color = if arena.current { TextColor::Yellow } else { TextColor::White };
                 hud.text(&format!("{marker}{name:<28} {:>5}", arena.players), color,
                     x + 8.0, y + 20.0 + i as f32 * FONT_H);
             }
         }
     }
-    hud.text("* current   Up/Down: scroll   Esc: close", TextColor::Green, x + 8.0, y + h - 18.0);
+    hud.text("Up/Down: select  Enter: join  Esc: close", TextColor::Green, x + 8.0, y + h - 18.0);
 }
 
 /// Draws help page `page` in a bevelled box at the top left, sized to its text.

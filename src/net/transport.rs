@@ -96,6 +96,8 @@ pub struct Transport {
     sock: UdpSocket,
     vie: Vie,
     continuum: Option<ContinuumSession>,
+    allow_legacy: bool,
+    legacy_selected: bool,
     pub state: State,
     next_reliable_id: u32,
     unacked: Vec<Outgoing>,
@@ -136,6 +138,11 @@ impl Transport {
         }))
     }
 
+    /// Permit the server to explicitly select VIE/plaintext before exchanging Continuum keys.
+    pub fn allow_legacy_negotiation(&mut self) {
+        self.allow_legacy = true;
+    }
+
     fn connect_inner(server: SocketAddr, continuum: Option<ContinuumSession>) -> io::Result<Self> {
         let bind: SocketAddr = if server.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" }.parse().unwrap();
         let sock = UdpSocket::bind(bind)?;
@@ -148,6 +155,8 @@ impl Transport {
             sock,
             vie: Vie::new(now ^ std::process::id().rotate_left(16)),
             continuum,
+            allow_legacy: false,
+            legacy_selected: false,
             state: State::Handshake { attempts: 0, last_sent: now },
             next_reliable_id: 0,
             unacked: Vec::new(),
@@ -209,7 +218,7 @@ impl Transport {
 
     fn send_raw(&mut self, data: &[u8]) {
         self.trace(|| format!("TX {}", packet_metadata(data, 0)));
-        let buf = if let Some(cont) = &self.continuum {
+        let buf = if let Some(cont) = self.continuum.as_ref().filter(|_| !self.legacy_selected) {
             let Some(cipher) = &cont.cipher else { return };
             let Ok(buf) = cipher.encrypt(data) else { return };
             buf
@@ -314,7 +323,22 @@ impl Transport {
                         self.trace(|| format!("RX ignored: oversize or disconnected (limit={limit})"));
                         continue;
                     }
-                    let pkt = if let Some(cont) = &self.continuum {
+                    if self.allow_legacy && !self.legacy_selected
+                        && matches!(self.state, State::Handshake { .. })
+                        && self.continuum.as_ref().is_some_and(|c| c.keys.is_none())
+                        && (n == 6 || n == 7) && buf[..n].starts_with(&[0, 2])
+                        && self.vie.initialize(u32_at(&buf[..n], 2).unwrap())
+                    {
+                        self.legacy_selected = true;
+                        self.last_recv_tick = now_tick();
+                        self.packets_received = self.packets_received.wrapping_add(1);
+                        self.state = State::Connected;
+                        self.events.push_back(Event::Connected);
+                        eprintln!("[Transport] server selected VIE/plaintext transport");
+                        self.send_sync_request();
+                        continue;
+                    }
+                    let pkt = if let Some(cont) = self.continuum.as_ref().filter(|_| !self.legacy_selected) {
                         if matches!(self.state, State::Handshake { .. }) && buf[..n].starts_with(&[0, 0x10]) {
                             self.accept_continuum_response(&buf[..n]);
                             continue;
@@ -473,7 +497,7 @@ impl Transport {
             }
             0x02 => {
                 if matches!(self.state, State::Handshake { .. }) {
-                    let valid = if let Some(cont) = &self.continuum {
+                    let valid = if let Some(cont) = self.continuum.as_ref().filter(|_| !self.legacy_selected) {
                         // Continuum has already exchanged keys. Unlike VIE, its
                         // encrypted 00 02 does not require a key field or zero body.
                         cont.cipher.is_some()

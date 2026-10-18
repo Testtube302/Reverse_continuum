@@ -75,6 +75,27 @@ struct Args {
     typed: String,
 }
 
+fn arena_destination(text: &str) -> Option<&str> {
+    let command = text.split_once(char::is_whitespace).map_or(text, |(word, _)| word);
+    command.eq_ignore_ascii_case("?go").then(|| text[command.len()..].trim())
+}
+
+/// Returns true when the caller must discard cached arena graphics and selection.
+fn submit_chat(game: &mut Game, text: &str, selected: Option<u16>) -> bool {
+    let result = if let Some(name) = arena_destination(text) {
+        game.change_arena(name).map(|_| true)
+    } else if let Some(session) = &mut game.session {
+        session.send_chat(text, selected).map(|_| false)
+    } else {
+        game.notices.push(text.to_owned());
+        Ok(false)
+    };
+    match result {
+        Ok(changed) => changed,
+        Err(error) => { game.notices.push(error.into()); false }
+    }
+}
+
 fn parse_args() -> Args {
     let mut args = Args {
         assets: None,
@@ -681,12 +702,15 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
                 arena: args.arena.clone(),
                 map_dir: assets.path("zones").join(zone_dir),
             };
-            let session = if let Some(program) = &args.continuum_expander {
+            let bundled_expander = std::env::current_exe().ok()
+                .and_then(|path| path.parent().map(|dir| dir.join(".continuum/expand")))
+                .filter(|path| path.is_file());
+            let session = if let Some(program) = args.continuum_expander.as_ref().or(bundled_expander.as_ref()) {
                 let mut expander = aicontinuum::net::continuum_expander::CommandExpander::new(program.clone());
                 aicontinuum::net::native_identity::prepare(|nonce| expander.expand_identity(nonce))
                     .and_then(|identity| {
                         eprintln!("[Session] native identity prepared; Windows-only fields unavailable");
-                        Session::connect_continuum_identified(config, move |seed| match expander.expand(seed) {
+                        Session::connect_auto_identified(config, move |seed| match expander.expand(seed) {
                             Ok(table) => Some(table),
                             Err(error) => { eprintln!("Continuum expansion: {error}"); None }
                         }, identity)
@@ -730,6 +754,7 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
     let mut menu_open = args.menu;
     let mut arena_list_open = false;
     let mut arena_list_offset = 0usize;
+    let mut arena_selected = 0usize;
     let mut arena_requested_at = 0.0;
     let mut help_page: Option<usize> = args.help;
     // The profile's key definitions and macros from keyboard.dat / macro.dat.
@@ -754,6 +779,7 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
     let mut last_ship: u8 = args.ship.unwrap_or(0);
 
     loop {
+        let mut arena_changed = false;
         // Chat entry: Enter opens/sends, Esc cancels; while typing, keys go to the message.
         let typing = hud.chat_input.is_some();
         if !typing && is_key_pressed(KeyCode::F8)
@@ -771,10 +797,20 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
             menu_consumed = true;
             if is_key_pressed(KeyCode::Escape) { arena_list_open = false; }
             if is_key_pressed(KeyCode::Up) || mouse_wheel().1 > 0.0 {
-                arena_list_offset = arena_list_offset.saturating_sub(1);
+                arena_selected = arena_selected.saturating_sub(1);
             }
             if is_key_pressed(KeyCode::Down) || mouse_wheel().1 < 0.0 {
-                arena_list_offset = arena_list_offset.saturating_add(1);
+                arena_selected = arena_selected.saturating_add(1);
+            }
+            let arenas = game.session.as_ref().and_then(|s| s.arena_list.as_ref());
+            arena_selected = arena_selected.min(arenas.map_or(0, |a| a.len().saturating_sub(1)));
+            if (is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::KpEnter))
+                && let Some(name) = arenas.and_then(|a| a.get(arena_selected)).map(|a| a.name.clone())
+            {
+                match game.change_arena(&name) {
+                    Ok(()) => { arena_changed = true; arena_list_open = false; }
+                    Err(error) => game.notices.push(error.into()),
+                }
             }
             while get_char_pressed().is_some() {}
         } else if menu_open {
@@ -812,11 +848,7 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
         if !menu_consumed && (is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::KpEnter)) {
             match hud.chat_input.take() {
                 Some(text) if !text.trim().is_empty() => {
-                    if let Some(s) = game.session.as_mut() {
-                        s.send_public_chat(&text);
-                    } else {
-                        game.notices.push(text);
-                    }
+                    arena_changed |= submit_chat(&mut game, &text, hud.selected);
                 }
                 Some(_) => {}
                 None => hud.chat_input = Some(String::new()),
@@ -852,10 +884,7 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
             if let Some(n) = a.strip_prefix("Macro").and_then(|n| n.parse::<usize>().ok()) {
                 let text = macros.lines.get(n.wrapping_sub(1)).cloned().unwrap_or_default();
                 if !text.trim().is_empty() {
-                    match game.session.as_mut() {
-                        Some(s) => s.send_public_chat(&text),
-                        None => game.notices.push(text),
-                    }
+                    arena_changed |= submit_chat(&mut game, &text, hud.selected);
                 }
             }
         }
@@ -863,6 +892,11 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
             hud.chat_input.as_mut().unwrap().pop();
         }
         let typing = hud.chat_input.is_some();
+        if arena_changed {
+            tiles = None;
+            hud.selected = None;
+            hud.chat_input = None;
+        }
         game.frame();
 
         let ready = game.world().is_some();
@@ -941,6 +975,7 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
                         if let Some(s) = game.session.as_mut() {
                             s.request_arena_list();
                             arena_list_open = true;
+                            arena_selected = 0;
                             arena_list_offset = 0;
                             arena_requested_at = get_time();
                         } else {
@@ -1044,7 +1079,7 @@ async fn run_game(mut args: Args, assets: &AssetDir) {
                 hud::draw_menu(&hud);
             }
             if arena_list_open {
-                hud::draw_arena_list(&hud, &game, &mut arena_list_offset, get_time() - arena_requested_at > 10.0);
+                hud::draw_arena_list(&hud, &game, &mut arena_list_offset, arena_selected, get_time() - arena_requested_at > 10.0);
             }
         } else {
             clear_background(BLACK);
@@ -1386,4 +1421,14 @@ fn draw_world(game: &Game, tiles: &Tiles, gfx: &Graphics, hud: &mut hud::Hud) {
     }
 
     hud.draw(game);
+}
+
+#[cfg(test)]
+mod chat_command_tests {
+    #[test]
+    fn go_command_requires_a_word_boundary() {
+        for (line, destination) in [("?go", Some("")), ("?GO  duel ", Some("duel")), ("?go 12", Some("12")), ("?goals", None), ("//?go duel", None), (":Name:?go duel", None)] {
+            assert_eq!(super::arena_destination(line), destination);
+        }
+    }
 }

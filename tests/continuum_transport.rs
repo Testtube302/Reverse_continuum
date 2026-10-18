@@ -674,3 +674,71 @@ fn delayed_download_recovers_lost_chunk_and_deduplicates_retransmission() {
     assert!(settle(&mut client).is_empty());
     assert_eq!(cipher.decrypt(&receive(&server)).unwrap(), vec![0, 4, 0, 0, 0, 0]);
 }
+
+#[test]
+fn automatic_mode_accepts_explicit_plaintext_and_vie_selection() {
+    use aicontinuum::net::vie::Vie;
+    for encrypted in [false, true] {
+        let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+        server.set_read_timeout(Some(Duration::from_millis(500))).unwrap();
+        let mut client = Transport::connect_continuum(server.local_addr().unwrap(), |_| Some([0; 20])).unwrap();
+        client.allow_legacy_negotiation();
+        let mut buf = [0; 2048];
+        let (_, addr) = server.recv_from(&mut buf).unwrap();
+        let client_key = u32::from_le_bytes(buf[2..6].try_into().unwrap());
+        let key = if encrypted { client_key.wrapping_neg() } else { client_key };
+        let mut reply = vec![0, 2];
+        reply.extend_from_slice(&key.to_le_bytes());
+        server.send_to(&reply, addr).unwrap();
+        assert!(settle(&mut client).iter().any(|e| matches!(e, Event::Connected)));
+        receive(&server); // Sync.
+        let mut cipher = Vie::new(0);
+        cipher.client_key = client_key;
+        assert!(cipher.initialize(key));
+        client.send(&[6, 3, 0, 0, 0, b'x', 0]);
+        let mut packet = receive(&server);
+        cipher.decrypt(&mut packet);
+        assert_eq!(packet, [6, 3, 0, 0, 0, b'x', 0]);
+        let mut response = vec![7, 3, 0, 0, 0, b'y', 0];
+        cipher.encrypt(&mut response);
+        server.send_to(&response, addr).unwrap();
+        assert!(settle(&mut client).iter().any(|e| matches!(e, Event::Packet(p) if p == &[7, 3, 0, 0, 0, b'y', 0])));
+    }
+}
+
+#[test]
+fn automatic_mode_does_not_downgrade_after_continuum_keys() {
+    let (mut client, server, addr) = pair(|_| Some([0; 20]));
+    client.allow_legacy_negotiation();
+    server.send_to(&RESPONSE, addr).unwrap();
+    settle(&mut client);
+    assert_eq!(receive(&server), ACK);
+    server.send_to(&[0, 2, 0, 0, 0, 0], addr).unwrap();
+    assert!(!settle(&mut client).iter().any(|e| matches!(e, Event::Connected)));
+    assert!(matches!(client.state, State::Handshake { .. }));
+}
+
+#[test]
+fn plaintext_transport_keeps_the_advertised_continuum_login_format() {
+    use aicontinuum::net::continuum_identity::LoginIdentity;
+    use aicontinuum::net::session::{Config, Session};
+    let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+    server.set_read_timeout(Some(Duration::from_millis(500))).unwrap();
+    let mut session = Session::connect_auto_identified(Config {
+        server: server.local_addr().unwrap(), name: "Fixture".into(), password: "test".into(),
+        arena: None, map_dir: std::env::temp_dir(),
+    }, |_| Some([0; 20]), LoginIdentity { billing: [0; 64], machine_id: 1, timezone_bias: 0 }).unwrap();
+    let mut buf = [0; 2048];
+    let (_, addr) = server.recv_from(&mut buf).unwrap();
+    assert_eq!(&buf[6..8], &[0x11, 0]);
+    let mut response = vec![0, 2];
+    response.extend_from_slice(&buf[2..6]);
+    server.send_to(&response, addr).unwrap();
+    std::thread::sleep(Duration::from_millis(20));
+    session.update();
+    assert_eq!(&receive(&server)[..2], &[0, 5]); // Sync.
+    let login = receive(&server);
+    assert_eq!(&login[..2], &[0, 3]);
+    assert_eq!(login.len(), 6 + 165);
+    assert_eq!(login[6], 0x24);
+}

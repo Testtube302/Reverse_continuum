@@ -25,7 +25,7 @@ fn connect(config: Config) -> std::io::Result<Session> {
     if let Some(program) = std::env::var_os("AICONTINUUM_TEST_EXPANDER") {
         let mut expander = aicontinuum::net::continuum_expander::CommandExpander::new(program.into());
         let identity = aicontinuum::net::native_identity::prepare(|nonce| expander.expand_identity(nonce))?;
-        Session::connect_continuum_identified(config, move |seed| expander.expand(seed).ok(), identity)
+        Session::connect_auto_identified(config, move |seed| expander.expand(seed).ok(), identity)
     } else {
         Session::connect(config)
     }
@@ -310,4 +310,53 @@ fn shots_kill_and_server_reports_the_kill() {
     for g in [&mut a, &mut b] {
         g.session.as_mut().unwrap().disconnect();
     }
+}
+
+#[test]
+fn private_and_team_routing_do_not_leak_to_other_players() {
+    if server().is_none() { return; }
+    let mut a = connect(config("AIC-RouteA")).unwrap();
+    let mut b = connect(config("AIC-RouteB")).unwrap();
+    let mut c = connect(config("AIC-RouteC")).unwrap();
+    assert!(pump_until(&mut [&mut a, &mut b, &mut c], 20, |s| s.iter().all(|s| s.ready() && s.players.len() >= 3)));
+    a.request_ship(0); b.request_ship(0); c.request_ship(0);
+    assert!(pump_until(&mut [&mut a, &mut b, &mut c], 5, |s| s.iter().all(|s| s.me().is_some_and(|p| p.ship == 0))));
+    // Use the server's balanced public teams instead of requesting disallowed private frequencies.
+    if a.me().unwrap().freq == c.me().unwrap().freq {
+        std::mem::swap(&mut b, &mut c);
+    } else if b.me().unwrap().freq == c.me().unwrap().freq {
+        std::mem::swap(&mut a, &mut c);
+    }
+    assert_eq!(a.me().unwrap().freq, b.me().unwrap().freq);
+    assert_ne!(a.me().unwrap().freq, c.me().unwrap().freq);
+    let named = format!(":{}:routing-private", b.config.name);
+    for (line, body, kind) in [("//routing-team", "routing-team", 3), (named.as_str(), "routing-private", 5), ("/routing-selected", "routing-selected", 5)] {
+        a.send_chat(line, b.pid).unwrap();
+        assert!(pump_until(&mut [&mut a, &mut b, &mut c], 5, |s| s[1].chat.iter().any(|m| m.kind == kind && m.text == body)));
+        pump_until(&mut [&mut a, &mut b, &mut c], 1, |_| false);
+        assert!(!c.chat.iter().any(|m| m.text == body), "message leaked: {body}");
+    }
+    a.disconnect(); b.disconnect(); c.disconnect();
+}
+
+#[test]
+fn switches_arena_and_returns_without_reconnecting() {
+    if server().is_none() { return; }
+    let mut s = connect(config("AIC-Switch")).unwrap();
+    assert!(pump_until(&mut [&mut s], 20, |s| s[0].ready()));
+    let address = s.transport.local_addr().unwrap();
+    for name in ["duel", "0"] {
+        s.change_arena(name).unwrap();
+        assert!(!s.ready());
+        assert!(s.players.is_empty() && s.flags.is_empty() && s.map.is_none());
+        assert!(pump_until(&mut [&mut s], 20, |s| s[0].ready()));
+        assert!(s.me().is_some());
+        // Arena populations are cached by SS.NET; allow the cache to include this arrival.
+        pump_until(&mut [&mut s], 2, |_| false);
+        s.request_arena_list();
+        assert!(pump_until(&mut [&mut s], 5, |s| s[0].arena_list.is_some()));
+        assert!(s.arena_list.as_ref().unwrap().iter().any(|a| a.current && a.name == name), "expected {name}: {:?}", s.arena_list);
+        assert_eq!(s.transport.local_addr().unwrap(), address);
+    }
+    s.disconnect();
 }

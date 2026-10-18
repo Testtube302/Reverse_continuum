@@ -224,6 +224,17 @@ impl Session {
         Ok(Self::with_transport(config, transport, None))
     }
 
+    /// Advertise Continuum login while accepting the server's explicit transport choice.
+    pub fn connect_auto_identified(
+        config: Config,
+        expand: impl FnMut(u32) -> Option<[u32; 20]> + Send + 'static,
+        identity: super::continuum_identity::LoginIdentity,
+    ) -> io::Result<Self> {
+        let mut session = Self::connect_continuum_identified(config, expand, identity)?;
+        session.transport.allow_legacy_negotiation();
+        Ok(session)
+    }
+
     /// Connect using Continuum transport and its 165-byte login format.
     /// The identity field is caller-supplied; its billing-server interpretation
     /// is not part of the public zone protocol. No integrity response is forged.
@@ -532,7 +543,10 @@ impl Session {
 
     fn send_arena_login(&mut self) {
         let (number, name) = match &self.config.arena {
-            Some(a) => (0xFFFDu16, a.clone()),
+            Some(a) => match a.parse::<u16>() {
+                Ok(n) if n < 0xFFFD => (n, String::new()),
+                _ => (0xFFFDu16, a.clone()),
+            },
             None => (0xFFFFu16, String::new()),
         };
         let mut p = vec![0x01, SPECTATOR];
@@ -552,6 +566,22 @@ impl Session {
         self.players.clear();
         self.map = None;
         self.settings = None;
+        self.map_name = None;
+        self.arena_list = None;
+        self.remote_fires.clear();
+        self.deaths.clear();
+        self.prize_events.clear();
+        self.flags.clear();
+        self.doors = None;
+        self.door_generation = 0;
+        self.arena_messages.clear();
+        self.pending_status = 0;
+        self.status_bits = 0;
+        self.warp_flashes.clear();
+        self.ball_packets.clear();
+        self.bricks.clear();
+        self.pending_security_key = None;
+        self.expected_map_checksum = 0;
     }
 
     /// Requests a ship (0-7) or spectator mode (8).
@@ -600,6 +630,40 @@ impl Session {
         p.extend_from_slice(&killer.to_le_bytes());
         p.extend_from_slice(&bounty.to_le_bytes());
         self.transport.send_reliable(&p);
+    }
+
+    /// Route typed messages and macros identically; malformed private input never becomes public.
+    pub fn send_chat(&mut self, text: &str, selected: Option<u16>) -> Result<(), &'static str> {
+        let pid = self.pid.filter(|_| self.ready()).ok_or("Wait until arena entry completes.")?;
+        let selected = selected.filter(|id| self.players.contains_key(id));
+        let route = super::chat::route(text, selected, |name| {
+            self.players.values().find(|p| p.name.eq_ignore_ascii_case(name)).map(|p| p.pid)
+        })?;
+        let mut packet = vec![6, route.kind, 0];
+        packet.extend_from_slice(&route.target.to_le_bytes());
+        packet.extend(route.text.bytes().take(240));
+        packet.push(0);
+        self.transport.send_reliable(&packet);
+        let body = cstr(&packet[5..]);
+        let (kind, text) = match route.kind {
+            5 => (7, format!("To {}> {body}", self.players[&route.target].name)),
+            7 => (7, format!("To {body}")),
+            9 => (9, format!("Channel> {body}")),
+            kind => (kind, body),
+        };
+        self.chat.push(Chat { kind, pid, text });
+        Ok(())
+    }
+
+    pub fn change_arena(&mut self, name: &str) -> Result<(), &'static str> {
+        if !self.ready() { return Err("Wait until arena entry completes."); }
+        let name = name.trim();
+        if name.len() > 15 || !name.bytes().all(|b| b.is_ascii_graphic()) {
+            return Err("Arena names must be at most 15 printable characters without spaces.");
+        }
+        self.config.arena = (!name.is_empty()).then(|| name.to_owned());
+        self.send_arena_login();
+        Ok(())
     }
 
     pub fn send_public_chat(&mut self, text: &str) {
