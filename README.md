@@ -72,8 +72,9 @@ AICONTINUUM_SERVER=127.0.0.1:5000 cargo test -- --test-threads=1  # + live zone 
 
 ## Windows and Linux preview packages
 
-See [platform setup and packaging](docs/PLATFORMS.md). The prepared native CI recipe packages the
+See [platform setup and packaging](docs/PLATFORMS.md). Native CI packages the
 client and its Python/Unicorn helper together; original game assets and the private
 reference image are supplied separately. Windows/Linux identity collectors and
-per-user settings paths are implemented, but public-server and desktop acceptance
-must be verified on the destination OS.
+per-user settings paths pass native regression tests. Windows/Linux package builds
+and helper startup checks pass; public-server and desktop gameplay acceptance
+still require testing on the destination OS.

@@ -890,3 +890,10 @@
   subsequent valid encrypted packet still arrives. Source:
   https://learn.microsoft.com/en-us/windows/win32/api/winsock/nf-winsock-recv.
   GitHub workflow access is now authorized and native Windows/Linux CI is active.
+
+- Native CI completed successfully for Windows MSVC and Ubuntu 22.04 x86-64 at
+  447ba47: regression tests, clippy, release client builds, frozen Python/Unicorn
+  helper builds, missing-image startup smoke checks and archive upload all pass.
+  Run: https://github.com/Testtube302/Reverse_continuum/actions/runs/39156836289.
+  No private runtime or game assets were sent to runners. Native GUI/audio and
+  encrypted public-server acceptance remain destination-machine tests.

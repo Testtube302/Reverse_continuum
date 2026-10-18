@@ -55,16 +55,18 @@ The optional `--runtime-code /private/path/runtime-code.bin` adds the verified i
 only to a private local package. It is not used by GitHub Actions. Game assets and
 saved accounts are never copied by this script. Keep private packages out of Git.
 
-The CI recipe at `tools/package/platforms.yml` is ready to install as
-`.github/workflows/platforms.yml`. Publishing that active workflow requires GitHub
-`workflow` permission; it has not run yet. Once activated, it builds/tests Windows
-and Linux on native runners. Its artifacts contain executables/support libraries,
-never the private reference image or game assets.
+The active workflow is `.github/workflows/platforms.yml`; the matching review
+recipe is `tools/package/platforms.yml`. It builds/tests Windows and Linux on
+native runners. Public artifacts contain executables/support libraries, never
+the private reference image or game assets.
 
-Current evidence: macOS regression tests, release build, packaged-helper equivalence
-and local encrypted arena entry pass. Windows GNU release build and test compilation
-pass. Linux x86-64 code/test cross-check passes. Native Windows/Linux execution and
-complete destination-platform packages remain pending.
+Native Windows MSVC and Ubuntu 22.04 x86-64 regression tests, release builds,
+and packaged-helper startup checks pass at code commit `447ba47`:
+[successful native run](https://github.com/Testtube302/Reverse_continuum/actions/runs/39156836289).
+Windows testing exposed and fixed an oversized UDP datagram handling bug:
+WSAEMSGSIZE now discards the datagram instead of disconnecting. Mac tests and local
+encrypted arena entry also pass. Native Windows/Linux graphical gameplay, audio,
+and login with the private runtime image still require destination-machine testing.
 
 ## Identity mapping and validation limits
 
