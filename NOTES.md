@@ -897,3 +897,10 @@
   Run: https://github.com/Testtube302/Reverse_continuum/actions/runs/39156836289.
   No private runtime or game assets were sent to runners. Native GUI/audio and
   encrypted public-server acceptance remain destination-machine tests.
+
+- Mac entry point (2026-10-18): packaging now creates AIContinuum.app with Finder
+  display name AIContinuum. The internal launcher resolves the installation folder
+  independently of the working directory, invokes the bundled client with assets
+  and helper paths, preserves connection diagnostics, and forwards arguments.
+  The raw client is inside Contents/MacOS; no separate command launcher is needed.
+  Assets/settings/helper remain beside the app in the existing installation folder.

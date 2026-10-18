@@ -10,6 +10,9 @@ compatibility on every device.
 
 1. Extract the complete package, including `.continuum`. On Windows run
    `AIContinuum.exe`; on Linux run `./AIContinuum` in a graphical desktop session.
+   On macOS double-click `AIContinuum.app` (Finder displays AIContinuum). Keep it
+   in the installation folder with its support files; no command launcher or helper
+   needs to be run separately.
 2. Supply your Continuum assets beside the executable: `graphics/`, `sound/`,
    `menures.dll`, `menu040.dll`, and any desired `skins/` and help/data files.
    Alternatively pass `--assets /path/to/Continuum`. No original game assets are

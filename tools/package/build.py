@@ -63,6 +63,10 @@ def main():
     if smoke.returncode != 1 or b'Continuum reference expansion failed:' not in smoke.stderr:
         raise RuntimeError('packaged helper failed its dependency/diagnostic smoke test')
     shutil.copy2(REPO / 'docs/PLATFORMS.md', output / 'START-HERE.md')
+    if sys.platform == 'darwin':
+        from macos_app import build as build_app
+        build_app(output / 'AIContinuum', output / 'AIContinuum.app')
+        (output / 'AIContinuum').unlink()
     commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=REPO, text=True).strip()
     manifest = {'commit': commit, 'os': platform.system(), 'architecture': platform.machine(),
         'dirty_source': bool(subprocess.check_output(['git', 'status', '--porcelain', '--untracked-files=no'], cwd=REPO)),
