@@ -245,6 +245,14 @@ impl Game {
         g
     }
 
+    /// Keep the zone transport and chat history; discard the previous arena's world.
+    pub fn change_arena(&mut self, name: &str) -> Result<(), &'static str> {
+        self.session.as_mut().ok_or("Arena switching requires a zone connection.")?.change_arena(name)?;
+        let session = self.session.take().unwrap();
+        *self = Self::online(session);
+        Ok(())
+    }
+
     pub fn online(session: Session) -> Self {
         Self::new(Some(session), None)
     }

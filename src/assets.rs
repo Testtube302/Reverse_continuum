@@ -26,7 +26,7 @@ impl AssetDir {
         }
         candidates
             .into_iter()
-            .find(|c| c.join("graphics").is_dir())
+            .find(|c| resolve_case(c, "graphics").is_dir())
             .map(|root| Self { root })
             .ok_or_else(|| {
                 format!("no Continuum install found (need a dir containing graphics/); pass a path or set {ASSETS_ENV}")
@@ -34,12 +34,53 @@ impl AssetDir {
     }
 
     pub fn path(&self, rel: &str) -> PathBuf {
-        self.root.join(rel)
+        resolve_case(&self.root, rel)
     }
 
     pub fn read(&self, rel: &str) -> Result<Vec<u8>, String> {
-        let p = self.path(rel);
+        let local = self.data_root().join(rel);
+        let p = if is_settings(rel) && local.is_file() { local } else { self.path(rel) };
         std::fs::read(&p).map_err(|e| format!("{}: {e}", p.display()))
+    }
+
+    /// Settings/maps are writable user data on Windows/Linux; existing Mac installs stay portable.
+    pub fn data_root(&self) -> PathBuf {
+        if let Some(path) = std::env::var_os("AICONTINUUM_DATA") { return PathBuf::from(path); }
+        if self.root.join(".portable").is_file() { return self.root.clone(); }
+        #[cfg(target_os = "windows")]
+        if let Some(path) = std::env::var_os("LOCALAPPDATA") {
+            return PathBuf::from(path).join("AIContinuum");
+        }
+        #[cfg(target_os = "linux")]
+        {
+            if let Some(path) = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).filter(|p| p.is_absolute()) {
+                return path.join("aicontinuum");
+            }
+            if let Some(home) = std::env::var_os("HOME") {
+                return PathBuf::from(home).join(".local/share/aicontinuum");
+            }
+        }
+        self.root.clone()
+    }
+
+    pub fn prepare_data(&self) -> std::io::Result<()> {
+        let root = self.data_root();
+        std::fs::create_dir_all(&root)?;
+        for name in ["profile.dat", "zone.dat", "keyboard.dat", "macro.dat"] {
+            let source = self.path(name);
+            let target = root.join(name);
+            if source.is_file() && !target.exists() {
+                // create_new never overwrites settings created by a simultaneous launch.
+                use std::io::Write;
+                let bytes = std::fs::read(&source)?;
+                match std::fs::OpenOptions::new().write(true).create_new(true).open(target) {
+                    Ok(mut out) => out.write_all(&bytes)?,
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {},
+                    Err(e) => return Err(e),
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Loads `graphics/<name>.bm2`.
@@ -82,4 +123,42 @@ pub struct RgbaImage {
     pub width: u32,
     pub height: u32,
     pub pixels: Vec<u8>,
+}
+
+fn is_settings(name: &str) -> bool {
+    ["profile.dat", "zone.dat", "keyboard.dat", "macro.dat"].iter().any(|n| name.eq_ignore_ascii_case(n))
+}
+
+// Continuum installs use mixed-case Windows filenames. Resolve each asset component
+// on case-sensitive Linux filesystems, preferring an exact match.
+fn resolve_case(root: &Path, rel: &str) -> PathBuf {
+    let mut path = root.to_owned();
+    for part in Path::new(rel).components() {
+        let exact = path.join(part.as_os_str());
+        if exact.exists() { path = exact; continue; }
+        let name = part.as_os_str().to_string_lossy();
+        let mut matches: Vec<_> = std::fs::read_dir(&path).into_iter().flatten().flatten()
+            .filter(|e| e.file_name().to_string_lossy().eq_ignore_ascii_case(&name)).map(|e| e.path()).collect();
+        matches.sort();
+        path = matches.into_iter().next().unwrap_or(exact);
+    }
+    path
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+    #[test]
+    fn mixed_case_assets_and_settings_do_not_overwrite_existing_files() {
+        let root = std::env::temp_dir().join(format!("aic-paths-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("GRAPHICS")).unwrap();
+        std::fs::write(root.join("GRAPHICS/Ships.BM2"), b"fixture").unwrap();
+        std::fs::write(root.join(".portable"), b"").unwrap();
+        std::fs::write(root.join("profile.dat"), b"preserve").unwrap();
+        let assets = AssetDir { root: root.clone() };
+        assert_eq!(assets.read("graphics/ships.bm2").unwrap(), b"fixture");
+        assets.prepare_data().unwrap();
+        assert_eq!(assets.read("profile.dat").unwrap(), b"preserve");
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

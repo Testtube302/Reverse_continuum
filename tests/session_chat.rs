@@ -49,5 +49,38 @@ fn outgoing_chat_displays_the_wire_text_with_our_player_id() {
         assert_eq!((shown.kind, shown.pid), (2, 42));
         assert_eq!(shown.text, expected);
     }
+    for (line, kind, expected) in [
+        ("//team".to_owned(), 3, "team".to_owned()),
+        (";2;channel".to_owned(), 9, "2;channel".to_owned()),
+        (":Away:private".to_owned(), 7, ":Away:private".to_owned()),
+        (format!("'{}", "x".repeat(260)), 3, "x".repeat(240)),
+    ] {
+        session.send_chat(&line, None).unwrap();
+        let n = peer.recv(&mut buf).unwrap();
+        assert_eq!(&buf[6..11], &[6, kind, 0, 0, 0]);
+        assert_eq!(&buf[11..n-1], expected.as_bytes());
+        assert_eq!(buf[n-1], 0);
+    }
+    let before = session.chat.len();
+    for line in [":", ":name:", "/secret", "\"team"] {
+        assert!(session.send_chat(line, None).is_err());
+    }
+    assert_eq!(session.chat.len(), before);
+    peer.set_nonblocking(true).unwrap();
+    assert_eq!(peer.recv(&mut buf).unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+    peer.set_nonblocking(false).unwrap();
+    assert!(session.change_arena("name with spaces").is_err());
+    assert!(session.change_arena(&"x".repeat(16)).is_err());
+    for (name, number) in [("duel", 0xFFFDu16), ("0", 0), ("12", 12), ("", 0xFFFF)] {
+        session.phase = Phase::InArena;
+        session.joined = true;
+        session.map = Some(Arc::new(Map::empty()));
+        session.settings = Some(Arc::new(ArenaSettings::default()));
+        session.change_arena(name).unwrap();
+        let n = peer.recv(&mut buf).unwrap();
+        assert_eq!(n, 6 + 26);
+        assert_eq!(&buf[14..16], &number.to_le_bytes());
+        assert!(!session.ready());
+    }
     session.disconnect();
 }

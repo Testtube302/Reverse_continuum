@@ -1,2 +1,4 @@
 /target
 *.png
+/.package-venv
+**/__pycache__/

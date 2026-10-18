@@ -10,3 +10,5 @@ mod continuum_key;
 pub mod transport;
 pub mod vie;
 pub mod arena_list;
+
+pub mod chat;
